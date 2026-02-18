@@ -9,46 +9,63 @@
     <style>
       body { margin: 0; overflow: hidden; font-family: sans-serif; }
       
-      /* 全画面スタートボタン (これで確実に音を出させる) */
+      /* ▼ MindARの標準ローディング画面をCSSで強制的に消す（これが諸悪の根源） */
+      .mindar-ui-loading, .mindar-ui-scanning {
+        display: none !important;
+      }
+
+      /* スタート画面 */
       #overlay {
         position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-        background: rgba(0,0,0,0.85); z-index: 9999;
+        background: black; z-index: 99999;
         display: flex; flex-direction: column; align-items: center; justify-content: center;
         color: white; text-align: center;
       }
       #enter-btn {
         padding: 15px 40px; font-size: 18px; font-weight: bold; letter-spacing: 2px;
         background: white; color: black; border: none; cursor: pointer; margin-top: 20px;
+        text-transform: uppercase;
       }
       
-      /* デバッグログ（動作確認用） */
+      /* デバッグログ */
       #debug-log {
-        position: absolute; top: 10px; left: 10px; color: yellow; z-index: 1000;
-        background: rgba(0,0,0,0.5); padding: 5px; pointer-events: none;
-        font-size: 12px;
+        position: absolute; top: 10px; left: 10px; color: #00ff00; z-index: 1000;
+        background: rgba(0,0,0,0.7); padding: 5px; pointer-events: none;
+        font-size: 12px; font-family: monospace;
       }
     </style>
 
     <script>
-      // ▼ ログ表示用
       function log(text) {
         const el = document.getElementById('debug-log');
         if(el) el.innerHTML = text;
         console.log(text);
       }
 
-      // ▼ 紙面を歪ませるシェーダー
-      AFRAME.registerComponent('distorted-paper', {
-        schema: {
-          src: {type: 'map'}, 
-        },
+      // ▼ 画質向上コンポーネント（Retina対応）
+      AFRAME.registerComponent('high-quality', {
         init: function () {
-          // ★修正ポイント: 新聞見開き（30段）の比率に合わせる
-          // 横764mm : 縦514mm ≒ 1 : 0.67
+            // シーンのレンダラーを取得
+            const scene = this.el.sceneEl;
+            // ピクセル比をデバイスの最大値に合わせる（これでiPhoneでもクッキリする）
+            scene.renderer.setPixelRatio(window.devicePixelRatio);
+            scene.renderer.antialias = true;
+            log("High Quality Mode: ON ✨");
+        }
+      });
+
+      // ▼ 紙面シェーダー
+      AFRAME.registerComponent('distorted-paper', {
+        schema: { src: {type: 'map'} },
+        init: function () {
+          // 見開き比率 1 : 0.67
           const geometry = new THREE.PlaneGeometry(1, 0.67, 64, 64); 
-          
           const texture = new THREE.TextureLoader().load(this.data.src.src); 
-          
+          // テクスチャの画質設定（ボヤけ防止）
+          texture.minFilter = THREE.LinearFilter;
+          texture.magFilter = THREE.LinearFilter;
+          texture.anisotropy = 16; // 異方性フィルタリング最大
+
           const material = new THREE.ShaderMaterial({
             wireframe: false,
             transparent: true,
@@ -61,20 +78,13 @@
               varying vec2 vUv;
               uniform float uTime;
               uniform float uAudio;
-              
               void main() {
                 vUv = uv;
                 vec3 pos = position;
-                
                 float d = distance(uv, vec2(0.5));
-                float mask = smoothstep(0.5, 0.1, d); // 端っこは揺らさない
-                
-                // 揺れの計算
-                float wave = sin(pos.x * 10.0 + uTime * 6.0) * cos(pos.y * 10.0 + uTime * 5.0);
-                
-                // Z軸（高さ）を変化させる
+                float mask = smoothstep(0.5, 0.1, d); 
+                float wave = sin(pos.x * 12.0 + uTime * 6.0) * cos(pos.y * 12.0 + uTime * 5.0);
                 pos.z += wave * uAudio * 0.3 * mask; 
-                
                 gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
               }
             `,
@@ -82,60 +92,58 @@
               varying vec2 vUv;
               uniform sampler2D uTexture;
               uniform float uAudio;
-              
               void main() {
                 vec4 color = texture2D(uTexture, vUv);
-                // 音に合わせて発光
                 color.rgb += uAudio * 0.3;
                 gl_FragColor = color;
               }
             `
           });
-          
           this.mesh = new THREE.Mesh(geometry, material);
           this.el.setObject3D('mesh', this.mesh);
         },
-        
         tick: function (time, timeDelta) {
           if (!this.mesh) return;
           this.mesh.material.uniforms.uTime.value = time / 1000;
-          // 外部から代入されたオーディオレベルを反映
           this.mesh.material.uniforms.uAudio.value = window.currentAudioLevel || 0;
         }
       });
 
-      // ▼ メイン制御
+      // ▼ アプリ制御
       AFRAME.registerComponent('app-controller', {
         init: function () {
             this.audioEl = document.querySelector('#bgm');
             this.model = document.querySelector('#band-model');
             this.hasStarted = false;
 
-            // マーカー認識イベント
             const scene = document.querySelector('a-scene');
             
-            scene.addEventListener("targetFound", () => {
-                log("Status: Target Found! 🎯");
-                if (window.isAudioUnlocked && !this.hasStarted) {
-                    this.startShow();
-                } else if (!window.isAudioUnlocked) {
-                    log("Please tap Start button first");
-                }
+            // MindARの準備ができたらグルグルを消す
+            scene.addEventListener("arReady", () => {
+                log("Camera Ready. Waiting for UI...");
             });
 
+            scene.addEventListener("targetFound", () => {
+                if (!window.isAudioUnlocked) {
+                    log("Please TAP BUTTON first!");
+                    return;
+                }
+                if (!this.hasStarted) {
+                    this.startShow();
+                }
+            });
+            
             scene.addEventListener("targetLost", () => {
-                log("Status: Searching... 🔍");
+                 if(this.hasStarted) log("Target Lost (Music playing)");
             });
         },
 
         startShow: function() {
             this.hasStarted = true;
-            log("Status: SHOW START 🎸");
+            log("Target Found! STARTING...");
             
-            // 音楽再生
             this.audioEl.play();
             
-            // モデル出現アニメーション
             this.model.setAttribute('visible', true);
             let s = 0;
             const timer = setInterval(() => {
@@ -144,67 +152,57 @@
                 if (s >= 1.0) clearInterval(timer);
             }, 30);
 
-            // オーディオ解析開始
             this.analyzeAudio();
         },
 
         analyzeAudio: function() {
-            const AudioContext = window.AudioContext || window.webkitAudioContext;
-            const ctx = new AudioContext();
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
             const src = ctx.createMediaElementSource(this.audioEl);
             const analyser = ctx.createAnalyser();
             analyser.fftSize = 256;
             src.connect(analyser);
             analyser.connect(ctx.destination);
-            
             const dataArray = new Uint8Array(analyser.frequencyBinCount);
             
             const loop = () => {
                 requestAnimationFrame(loop);
                 analyser.getByteFrequencyData(dataArray);
                 let sum = 0;
-                // 低音域(Bass)を取得
                 for(let i=0; i<8; i++) sum += dataArray[i];
-                let avg = sum / 8 / 255; 
-                
-                // グローバル変数に入れてシェーダーに渡す
-                window.currentAudioLevel = avg;
-                
-                // 振動 (Android)
-                if (avg > 0.6 && navigator.vibrate) navigator.vibrate(50);
+                window.currentAudioLevel = (sum / 8 / 255); 
             };
             loop();
         }
       });
 
-      // ▼ 最初のボタン操作
       window.onload = () => {
-        document.getElementById('enter-btn').addEventListener('click', () => {
-            // ここでAudioContextを一度触ってロック解除する
-            const AudioContext = window.AudioContext || window.webkitAudioContext;
-            const ctx = new AudioContext();
+        const btn = document.getElementById('enter-btn');
+        btn.addEventListener('click', () => {
+            // 音声ロック解除
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
             ctx.resume().then(() => {
                 window.isAudioUnlocked = true;
                 document.getElementById('overlay').style.display = 'none';
-                log("Status: Ready to Scan! 📸");
+                log("Ready! Scan the newspaper!");
             });
         });
       };
     </script>
   </head>
   <body>
+
     <div id="overlay">
         <h1>LIVE AR</h1>
-        <p>Turn on sound & Allow Camera</p>
-        <button id="enter-btn">ENTER LIVE</button>
+        <p>Turn up volume</p>
+        <button id="enter-btn">START CAMERA</button>
     </div>
-
-    <div id="debug-log">Status: Initializing...</div>
+    <div id="debug-log">Initializing...</div>
 
     <a-scene 
-      mindar-image="imageTargetSrc: ./targets.mind; uiScanning: no; filterMinCF:0.0001; filterBeta: 0.001;" 
+      high-quality
+      mindar-image="imageTargetSrc: ./targets.mind; uiLoading: no; uiScanning: no; filterMinCF:0.0001; filterBeta: 0.001;" 
       color-space="sRGB" 
-      renderer="colorManagement: true, physicallyCorrectLights" 
+      renderer="colorManagement: true, physicallyCorrectLights: true; antialias: true; alpha: true;" 
       vr-mode-ui="enabled: false" 
       device-orientation-permission-ui="enabled: false">
       
@@ -214,4 +212,27 @@
         <img id="paperTex" src="./asako_qr_1.png" />
       </a-assets>
 
-      <a-camera position="0 0 0" look-controls
+      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+      
+      <a-entity app-controller></a-entity>
+
+      <a-light type="ambient" intensity="0.8"></a-light>
+      <a-light type="directional" intensity="2" position="2 4 5" color="#ffaa00"></a-light>
+      <a-light type="spot" intensity="5" position="0 5 0" angle="45" penumbra="0.5" color="#ff0000"></a-light>
+
+      <a-entity mindar-image-target="targetIndex: 0">
+        
+        <a-entity distorted-paper="src: #paperTex" position="0 0 0.01"></a-entity>
+        
+        <a-entity id="band-model" 
+                  gltf-model="#modelAsset" 
+                  rotation="0 45 180" 
+                  position="0 0 0" 
+                  scale="0 0 0" 
+                  visible="false">
+        </a-entity>
+        
+      </a-entity>
+    </a-scene>
+  </body>
+</html>
