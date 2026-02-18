@@ -2,13 +2,19 @@
 <html>
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LIVE AR - VIBE CHECK</title>
+    <title>LIVE AR - EXTREME</title>
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
     
     <style>
-      body { margin: 0; overflow: hidden; font-family: sans-serif; background: black;}
+      body { margin: 0; overflow: hidden; background: black; }
       
+      /* 映像を揺らすためにvideoタグにアクセスしやすくする */
+      video {
+        transition: transform 0.05s linear; /* キビキビ動くように調整 */
+        transform-origin: center center;
+      }
+
       /* UI除去 */
       .mindar-ui-loading, .mindar-ui-scanning { display: none !important; }
 
@@ -20,129 +26,127 @@
         color: white; text-align: center;
       }
       #enter-btn {
-        padding: 15px 40px; font-size: 24px; font-weight: 900; letter-spacing: 4px;
-        background: white; color: black; border: none; cursor: pointer; margin-top: 30px;
-        text-transform: uppercase; clip-path: polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%);
+        padding: 20px 50px; font-size: 20px; font-weight: 900; background: white; color: black; border: none;
+        clip-path: polygon(0 0, 100% 0, 100% 70%, 85% 100%, 0 100%);
       }
-      #status { position: absolute; top:10px; left:10px; color:#0f0; font-family:monospace; font-size:10px; z-index:1000; pointer-events:none;}
+      /* デバッグ用：ちゃんと数値が取れてるか確認 */
+      #debug {
+        position: absolute; top: 10px; left: 10px; color: #0f0; font-family: monospace; font-size: 14px; z-index: 10000;
+        text-shadow: 1px 1px 0 #000;
+      }
     </style>
 
     <script>
-      // ▼ オーディオリアクティブ・エフェクト（足元の演出）
-      AFRAME.registerComponent('audio-ring', {
-        init: function () {
-          // リング状のメッシュを作成
-          const geometry = new THREE.RingGeometry(0.3, 0.35, 32);
-          const material = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5, side: THREE.DoubleSide });
-          this.mesh = new THREE.Mesh(geometry, material);
-          this.el.setObject3D('mesh', this.mesh);
-        },
-        tick: function () {
-          if (!this.mesh) return;
-          // 音量に合わせてリングが拡大縮小＆明滅
-          const level = window.currentAudioLevel || 0;
-          const scale = 1 + level * 2.0; // 結構派手に動かす
-          this.mesh.scale.set(scale, scale, 1);
-          this.mesh.material.opacity = 0.2 + level * 0.8;
-        }
-      });
-
-      // ▼ 【重要】カメラワーク制御（K-Pop風ズーム）
-      AFRAME.registerComponent('beat-camera', {
-        init: function() {
-            this.camera = this.el;
-            this.baseZoom = 1.0;
-        },
-        tick: function() {
-            const level = window.currentAudioLevel || 0;
-            
-            // 音が大きいとき、カメラのZoom値をいじる
-            // 1.0 (通常) 〜 1.4 (最大ズーム)
-            // 閾値(0.1)以下のノイズは無視
-            let targetZoom = 1.0;
-            if (level > 0.1) {
-                targetZoom = 1.0 + (level * 0.6); 
-            }
-
-            // 滑らかに追従させる（Lerp）
-            // 数値を大きくするとビビッドに、小さくするとヌルッと動く
-            this.camera.setAttribute('camera', 'zoom', 
-                this.camera.components.camera.data.zoom * 0.8 + targetZoom * 0.2
-            );
-
-            // さらに振動（手ブレ）を加える
-            if (level > 0.4) {
-                const shake = (Math.random() - 0.5) * 0.05 * level;
-                this.camera.object3D.position.x = shake;
-            } else {
-                this.camera.object3D.position.x = 0;
-            }
-        }
-      });
-
-      // ▼ アプリ制御
-      AFRAME.registerComponent('app-controller', {
+      // ▼ オーディオ解析＆映像ハック
+      AFRAME.registerComponent('audio-reactive-core', {
         init: function () {
             this.audioEl = document.querySelector('#bgm');
+            this.videoEl = null; // 後で取得
             this.model = document.querySelector('#band-model');
-            this.ring = document.querySelector('#effect-ring');
-            this.hasStarted = false;
+            this.effect = document.querySelector('#effect-plane');
+            this.debug = document.getElementById('debug');
+            
+            this.isPlaying = false;
+            this.analyser = null;
+            this.dataArray = null;
 
+            // マーカー認識時のシーケンス制御
             const scene = document.querySelector('a-scene');
             
+            // MindARのビデオ要素を取得（ここを揺らす！）
+            scene.addEventListener("arReady", () => {
+                this.videoEl = document.querySelector('video');
+            });
+
             scene.addEventListener("targetFound", () => {
-                if (window.isAudioUnlocked && !this.hasStarted) {
-                    this.startShow();
+                if (window.isAudioUnlocked && !this.isPlaying) {
+                    this.runSequence();
                 } else if(!window.isAudioUnlocked) {
-                    document.getElementById('status').innerText = "TAP BUTTON FIRST!";
+                    this.debug.innerText = "TAP BUTTON FIRST!";
                 }
             });
         },
 
-        startShow: function() {
-            this.hasStarted = true;
-            document.getElementById('status').innerText = "LIVE ON AIR";
-            
-            this.audioEl.play();
-            
-            // モデル出現アニメーション
-            this.model.setAttribute('visible', true);
-            this.ring.setAttribute('visible', true);
-            
-            let s = 0;
-            const timer = setInterval(() => {
-                s += 0.05;
-                // モデルのスケール
-                this.model.setAttribute('scale', `${s} ${s} ${s}`);
-                if (s >= 1.0) clearInterval(timer);
-            }, 20); // 少し高速に
+        runSequence: function() {
+            this.isPlaying = true;
+            this.debug.innerText = "SEQ: 1. GROWING...";
 
-            this.analyzeAudio();
+            // ① モデル表示＆ニョキッと生える (0.5秒)
+            this.model.setAttribute('visible', true);
+            this.model.setAttribute('animation', 'property: scale; from: 0 0 0; to: 1 1 1; dur: 800; easing: easeOutElastic;');
+
+            // ② エフェクトがシュンッ！と展開 (モデルの後、0.8秒後)
+            setTimeout(() => {
+                this.debug.innerText = "SEQ: 2. EFFECT SNAP!";
+                this.effect.setAttribute('visible', true);
+                // スケールを一気に広げるアニメーション
+                this.effect.setAttribute('animation', 'property: scale; from: 0 0 0; to: 1.5 1.5 1.5; dur: 300; easing: easeOutExpo;');
+            }, 800);
+
+            // ③ 音楽スタート＆リアクティブ開始 (1.2秒後)
+            setTimeout(() => {
+                this.debug.innerText = "SEQ: 3. MUSIC START & VIBE!!";
+                this.audioEl.play();
+                this.startReactiveLoop();
+            }, 1200);
         },
 
-        analyzeAudio: function() {
+        startReactiveLoop: function() {
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             const src = ctx.createMediaElementSource(this.audioEl);
             const analyser = ctx.createAnalyser();
-            analyser.fftSize = 256;
+            analyser.fftSize = 256; // 解像度
+            analyser.smoothingTimeConstant = 0.3; // 反応をキビキビさせる（デフォルト0.8だと遅い）
             src.connect(analyser);
             analyser.connect(ctx.destination);
+            
             const dataArray = new Uint8Array(analyser.frequencyBinCount);
             
-            const loop = () => {
-                requestAnimationFrame(loop);
+            const render = () => {
+                requestAnimationFrame(render);
                 analyser.getByteFrequencyData(dataArray);
+
+                // 低音域（Bass）をガッツリ取る
                 let sum = 0;
-                // 低音域重視
-                for(let i=0; i<6; i++) sum += dataArray[i]; 
-                window.currentAudioLevel = (sum / 6 / 255); // 0.0 ~ 1.0
+                // 0~5番目の周波数（超低音）だけを見る
+                for(let i=0; i<5; i++) sum += dataArray[i];
                 
-                // Androidバイブレーション（強め）
-                if (window.currentAudioLevel > 0.5 && navigator.vibrate) {
-                    navigator.vibrate(40);
+                // 平均値 (0.0 ~ 1.0)
+                // ★感度調整: 小さい音は切り捨て、大きい音を強調
+                let rawAvg = sum / 5 / 255; 
+                let level = 0;
+                
+                // しきい値（Threshold）: 0.3以下の音は無視（0にする）
+                if (rawAvg > 0.3) {
+                    level = (rawAvg - 0.3) * 2.0; // 残りを増幅
+                }
+
+                // デバッグ表示
+                // this.debug.innerText = `LEVEL: ${level.toFixed(2)}`;
+
+                // --- 演出への反映 ---
+
+                // 1. ビデオ背景自体のズーム（K-Pop風）
+                // 音がないときは 1.0、音があるときは最大 1.2倍
+                if (this.videoEl) {
+                    const zoom = 1.0 + (level * 0.15); 
+                    this.videoEl.style.transform = `scale(${zoom})`;
+                }
+
+                // 2. モデルのサイズ（ベースサイズほぼ0 + 音量）
+                // 音がないと 0.2、音で 1.5 まで巨大化
+                const modelScale = 0.2 + (level * 1.3);
+                this.model.object3D.scale.set(modelScale, modelScale, modelScale);
+
+                // 3. エフェクト（グリッド）の回転
+                this.effect.object3D.rotation.z += 0.01 + (level * 0.1);
+
+                // 4. Androidバイブレーション
+                if (level > 0.8 && navigator.vibrate) {
+                    navigator.vibrate(30);
                 }
             };
-            loop();
+            render();
         }
       });
 
@@ -152,7 +156,6 @@
             ctx.resume().then(() => {
                 window.isAudioUnlocked = true;
                 document.getElementById('overlay').style.display = 'none';
-                document.getElementById('status').innerText = "SCAN TARGET";
             });
         });
       };
@@ -161,41 +164,47 @@
   <body>
 
     <div id="overlay">
-        <h1 style="font-size:40px; margin:0; line-height:1;">LIVE<br><span style="color:red">AR</span></h1>
-        <p style="font-size:12px; opacity:0.7;">VOLUME MAX RECOMMENDED</p>
-        <button id="enter-btn">ENTER</button>
+        <h1>LIVE AR</h1>
+        <p>SOUND ON / MAX VOL</p>
+        <button id="enter-btn">ENTER LIVE</button>
     </div>
-    <div id="status">INIT...</div>
+    <div id="debug">INIT...</div>
 
     <a-scene 
       mindar-image="imageTargetSrc: ./targets.mind; uiLoading: no; uiScanning: no; filterMinCF:0.0001; filterBeta: 0.001;" 
       color-space="sRGB" 
-      renderer="colorManagement: true, physicallyCorrectLights: true; antialias: true; highRefreshRate: true;" 
+      renderer="colorManagement: true, physicallyCorrectLights: true;" 
       vr-mode-ui="enabled: false" 
       device-orientation-permission-ui="enabled: false">
       
       <a-assets>
         <a-asset-item id="modelAsset" src="./scene.gltf"></a-asset-item>
         <audio id="bgm" src="./music.m4a" preload="auto" crossorigin="anonymous"></audio>
+        <img id="gridTex" src="./target.png" />
       </a-assets>
 
-      <a-camera position="0 0 0" look-controls="enabled: false" beat-camera></a-camera>
+      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
       
-      <a-entity app-controller></a-entity>
+      <a-entity audio-reactive-core></a-entity>
 
+      <a-light type="directional" intensity="3" position="2 4 2" color="#ff0055"></a-light>
       <a-light type="ambient" intensity="0.5"></a-light>
-      <a-light type="spot" intensity="10" position="0 5 2" angle="30" penumbra="1" color="#ff0055"></a-light>
-      <a-light type="point" intensity="5" position="-2 2 2" color="#00aaff"></a-light>
 
       <a-entity mindar-image-target="targetIndex: 0">
         
-        <a-entity id="effect-ring" audio-ring position="0 0 0.01" visible="false"></a-entity>
+        <a-entity id="effect-plane" visible="false" position="0 0 -0.1">
+            <a-ring color="red" radius-inner="0.5" radius-outer="0.55"></a-ring>
+            <a-ring color="cyan" radius-inner="0.8" radius-outer="0.85"></a-ring>
+            <a-entity rotation="0 0 0"><a-plane color="white" height="2" width="0.02"></a-plane></a-entity>
+            <a-entity rotation="0 0 45"><a-plane color="white" height="2" width="0.02"></a-plane></a-entity>
+            <a-entity rotation="0 0 90"><a-plane color="white" height="2" width="0.02"></a-plane></a-entity>
+            <a-entity rotation="0 0 135"><a-plane color="white" height="2" width="0.02"></a-plane></a-entity>
+        </a-entity>
         
         <a-entity id="band-model" 
                   gltf-model="#modelAsset" 
-                  rotation="-90 180 0" 
+                  rotation="0 45 180" 
                   position="0 0 0" 
-                  scale="0 0 0" 
                   visible="false">
         </a-entity>
         
