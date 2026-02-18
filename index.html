@@ -6,143 +6,226 @@
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
     
     <script>
-      // ▼ ここがTouchDesigner的な部分（カスタムシェーダー）
-      AFRAME.registerComponent('audio-reactive-mesh', {
+      // ▼ 紙面を歪ませるシェーダー（画像テクスチャ対応版）
+      AFRAME.registerComponent('distorted-paper', {
+        schema: {
+          src: {type: 'map'}, // 新聞の画像を渡す
+        },
         init: function () {
           this.analyser = null;
           this.dataArray = null;
+          this.audioLevel = 0;
+
+          // 1. 新聞と同じサイズの平面を作る
+          const geometry = new THREE.PlaneGeometry(1, 1, 64, 64); // 分割数を増やして滑らかに
           
-          // メッシュ（平面）を作成
-          const geometry = new THREE.PlaneGeometry(1, 1, 32, 32); // 32x32分割のメッシュ
+          // 2. マテリアル（画像を表示しつつ歪ませる）
+          const texture = new THREE.TextureLoader().load(this.data.src.src); // A-Frameから画像取得
           
-          // シェーダーマテリアル（ここがビジュアルの肝）
           const material = new THREE.ShaderMaterial({
-            wireframe: true, // ワイヤーフレーム表示（カッコよく見せるため）
-            transparent: true,
             uniforms: {
               uTime: { value: 0 },
-              uAudio: { value: 0.0 } // 音の大きさを渡す変数
+              uAudio: { value: 0.0 },
+              uTexture: { value: texture }
             },
-            // 頂点シェーダー（形を変える）
             vertexShader: `
               varying vec2 vUv;
               uniform float uTime;
               uniform float uAudio;
               
+              // ノイズ関数（ランダムな揺れを作る）
+              float random (in vec2 st) {
+                  return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+              }
+
               void main() {
                 vUv = uv;
                 vec3 pos = position;
                 
-                // 【演出】中心からの距離を計算
+                // 中心からの距離
                 float d = distance(uv, vec2(0.5));
                 
-                // 【演出】音に合わせて波打たせる (TouchDesignerのNoise CHOP的な処理)
-                float wave = sin(pos.x * 10.0 + uTime * 5.0) * cos(pos.y * 10.0 + uTime * 5.0);
+                // 【演出】音に合わせて波打つ (Z軸方向)
+                // 低音でドーンと手前に突き出るような動き
+                float wave = sin(pos.x * 10.0 + uTime * 10.0) * cos(pos.y * 10.0 + uTime * 8.0);
                 
-                // z軸（高さ）を変化させる
-                pos.z += wave * uAudio * 0.5 * (1.0 - d); 
+                // エッジ（端っこ）は揺らさないようにして、現実の紙との境界をごまかす
+                float mask = smoothstep(0.5, 0.2, d); 
+
+                // 揺れ適用
+                pos.z += wave * uAudio * 0.3 * mask; 
                 
                 gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
               }
             `,
-            // フラグメントシェーダー（色を決める）
             fragmentShader: `
               varying vec2 vUv;
+              uniform sampler2D uTexture;
               uniform float uAudio;
               
               void main() {
-                // 音が大きいほど赤く、普段は黒く
-                vec3 color = mix(vec3(0.0, 0.0, 0.0), vec3(1.0, 0.0, 0.2), uAudio * 2.0);
-                gl_FragColor = vec4(color, 0.8);
+                // 画像の色を取得
+                vec4 color = texture2D(uTexture, vUv);
+                
+                // 音に合わせて少し明るく発光させる（インパクト）
+                color.rgb += uAudio * 0.2;
+                
+                gl_FragColor = color;
               }
-            `
+            `,
+            transparent: true
           });
           
           this.mesh = new THREE.Mesh(geometry, material);
           this.el.setObject3D('mesh', this.mesh);
-          
-          // 音声解析の準備（ユーザーアクション後に開始）
-          document.body.addEventListener('click', this.setupAudio.bind(this), { once: true });
-        },
-        
-        setupAudio: function () {
-          const audioEl = document.querySelector('#bgm');
-          if(!audioEl) return;
-
-          // AudioContextの作成
-          const context = new (window.AudioContext || window.webkitAudioContext)();
-          const src = context.createMediaElementSource(audioEl);
-          const analyser = context.createAnalyser();
-          
-          src.connect(analyser);
-          analyser.connect(context.destination);
-          
-          analyser.fftSize = 256;
-          this.analyser = analyser;
-          this.dataArray = new Uint8Array(analyser.frequencyBinCount);
-          
-          audioEl.play();
         },
         
         tick: function (time, timeDelta) {
           if (!this.mesh) return;
           
-          // 時間をシェーダーに渡す
+          // シェーダーに時間を渡す
           this.mesh.material.uniforms.uTime.value = time / 1000;
           
-          if (this.analyser) {
-            // 音声データを取得
-            this.analyser.getByteFrequencyData(this.dataArray);
-            
-            // 低音域（Bass）の平均レベルを取得
-            let sum = 0;
-            for(let i = 0; i < 10; i++) { // 低い周波数帯だけ見る
-                sum += this.dataArray[i];
-            }
-            let avg = sum / 10 / 255; // 0.0 〜 1.0 に正規化
-            
-            // シェーダーに渡す（スムージングして滑らかに）
-            this.mesh.material.uniforms.uAudio.value += (avg - this.mesh.material.uniforms.uAudio.value) * 0.1;
-          }
+          // 音量を滑らかに渡す
+          this.mesh.material.uniforms.uAudio.value += (this.audioLevel - this.mesh.material.uniforms.uAudio.value) * 0.1;
+        },
+
+        // 外部から音量を受け取る関数
+        updateAudioLevel: function(level) {
+            this.audioLevel = level;
         }
       });
 
-      // ▼ 機材が「にゅっ」と生えてくるアニメーション
-      AFRAME.registerComponent('grow-on-start', {
+      // ▼ 音声解析と全体の進行管理
+      AFRAME.registerComponent('live-controller', {
         init: function () {
-          this.el.setAttribute('scale', '0 0 0'); // 最初は極小
-          document.body.addEventListener('click', () => {
-             // 簡易的なアニメーション (本来はGSAP推奨だが今回はベタ書き)
-             let s = 0;
-             const grow = setInterval(() => {
-                 s += 0.05;
-                 this.el.setAttribute('scale', `${s} ${s} ${s}`);
-                 if (s >= 0.5) clearInterval(grow);
-             }, 50);
-          }, { once: true });
+            this.audioEl = document.querySelector('#bgm');
+            this.model = document.querySelector('#band-model');
+            this.paper = document.querySelector('#paper-plane');
+            this.startBtn = document.querySelector('#start-button');
+            
+            this.isPlaying = false;
+            
+            // スタートボタン処理
+            this.startBtn.addEventListener('click', () => {
+                this.startSequence();
+            });
+
+            // マーカー認識イベント
+            const scene = document.querySelector('a-scene');
+            scene.addEventListener("targetFound", () => {
+                if(!this.isPlaying) {
+                    this.startBtn.style.display = 'block'; // 認識したらボタン出す
+                    this.startBtn.innerText = "TAP TO START LIVE";
+                }
+            });
+            scene.addEventListener("targetLost", () => {
+                this.startBtn.style.display = 'none';
+                if(this.isPlaying) {
+                   this.audioEl.pause(); // ロストしたら一時停止
+                }
+            });
+        },
+
+        startSequence: function() {
+            this.isPlaying = true;
+            this.startBtn.style.display = 'none';
+
+            // 1. まず機材が生えてくる (アニメーション)
+            this.model.setAttribute('visible', true);
+            let scale = 0;
+            const grow = setInterval(() => {
+                scale += 0.02; // 生えるスピード
+                this.model.setAttribute('scale', `${scale} ${scale} ${scale}`);
+                if (scale >= 0.5) { // 目標サイズ (0.5)
+                    clearInterval(grow);
+                    // 2. 生えきったら音楽スタート & 振動開始
+                    this.startMusic();
+                }
+            }, 30); // 30msごとに更新
+        },
+
+        startMusic: function() {
+            this.audioEl.play();
+            
+            // AudioContextセットアップ
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            const ctx = new AudioContext();
+            const src = ctx.createMediaElementSource(this.audioEl);
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 256;
+            src.connect(analyser);
+            analyser.connect(ctx.destination);
+            
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            
+            // 毎フレーム音量を取得してシェーダーに渡すループ
+            const loop = () => {
+                requestAnimationFrame(loop);
+                analyser.getByteFrequencyData(dataArray);
+                
+                // 低音の平均を取る
+                let sum = 0;
+                for(let i=0; i<10; i++) sum += dataArray[i];
+                let avg = sum / 10 / 255; // 0.0~1.0
+                
+                // 紙面シェーダーに渡す
+                this.paper.components['distorted-paper'].updateAudioLevel(avg);
+                
+                // Androidバイブレーション
+                if (avg > 0.5 && navigator.vibrate) { // 音が大きい時だけ震える
+                    navigator.vibrate(50);
+                }
+            };
+            loop();
         }
       });
     </script>
+
+    <style>
+      body { margin: 0; overflow: hidden; }
+      #start-button {
+        position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%);
+        padding: 15px 30px; background: white; color: black; border: 2px solid black; 
+        font-family: sans-serif; font-weight: bold; letter-spacing: 2px;
+        display: none; z-index: 999; cursor: pointer;
+      }
+    </style>
   </head>
   <body>
-    <div style="position: absolute; bottom: 20px; width: 100%; text-align: center; z-index: 1000; color: white;">
-        TAP SCREEN TO START LIVE
-    </div>
+    <button id="start-button">SCANNING...</button>
 
-    <a-scene mindar-image="imageTargetSrc: ./targets.mind;" color-space="sRGB" renderer="colorManagement: true, physicallyCorrectLights" vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false">
+    <a-scene 
+      mindar-image="imageTargetSrc: ./targets.mind; uiScanning: no; filterMinCF:0.0001; filterBeta: 0.001;" 
+      color-space="sRGB" 
+      renderer="colorManagement: true, physicallyCorrectLights" 
+      vr-mode-ui="enabled: false" 
+      device-orientation-permission-ui="enabled: false">
       
       <a-assets>
-        <a-asset-item id="avatarModel" src="./model.gltf"></a-asset-item>
+        <a-asset-item id="modelAsset" src="./scene.gltf"></a-asset-item>
         <audio id="bgm" src="./music.m4a" preload="auto" crossorigin="anonymous"></audio>
+        <img id="paperTex" src="./asako_qr_1.png" />
       </a-assets>
 
       <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
+      <a-entity live-controller></a-entity>
+
+      <a-light type="ambient" intensity="1"></a-light>
+      <a-light type="directional" intensity="2" position="1 2 3"></a-light>
+
       <a-entity mindar-image-target="targetIndex: 0">
         
-        <a-entity audio-reactive-mesh position="0 0 0.05"></a-entity>
+        <a-entity id="paper-plane" distorted-paper="src: #paperTex" position="0 0 0.01"></a-entity>
         
-        <a-gltf-model src="#avatarModel" rotation="0 0 0" position="0 0 0" grow-on-start></a-gltf-model>
+        <a-entity id="band-model" 
+                  gltf-model="#modelAsset" 
+                  rotation="90 0 0" 
+                  position="0 0 0" 
+                  scale="0 0 0"
+                  visible="false">
+        </a-entity>
         
       </a-entity>
     </a-scene>
