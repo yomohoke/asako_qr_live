@@ -2,20 +2,14 @@
 <html>
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LIVE AR - SAFETY MODE</title>
+    <title>LIVE AR - FINAL CUT</title>
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
     
     <style>
       body { margin: 0; overflow: hidden; background: black; font-family: sans-serif; }
       
-      /* ビデオタグ（FX用） */
-      video {
-        transition: transform 0.1s ease-out; 
-        transform-origin: center center;
-      }
-
-      /* MindARのUIを消す */
+      /* UI除去 */
       .mindar-ui-loading, .mindar-ui-scanning { display: none !important; }
 
       /* スタート画面 */
@@ -27,138 +21,200 @@
       }
       
       #enter-btn {
-        margin-top: 20px; padding: 20px 60px; 
+        margin-top: 30px; padding: 20px 60px; 
         font-size: 24px; font-weight: 900; background: white; color: black; border: none;
+        clip-path: polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%);
       }
 
       /* デバッグログ */
-      #debug-console {
-        position: absolute; top: 0; left: 0; width: 100%;
-        background: rgba(0,0,0,0.5); color: #00ff00; 
-        padding: 5px; font-size: 14px; pointer-events: none; z-index: 10000;
-      }
-      
-      /* FX有効化ボタン (認識後に表示) */
-      #fx-btn {
-        position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%);
-        padding: 15px 30px; background: red; color: white; border: 2px solid white;
-        font-weight: bold; display: none; z-index: 9999; cursor: pointer;
+      #debug {
+        position: absolute; top: 10px; left: 10px; 
+        color: #00ff00; font-family: monospace; font-size: 12px; 
+        background: rgba(0,0,0,0.5); pointer-events: none; z-index: 10000;
       }
     </style>
 
     <script>
-      // ログ関数
       function log(msg) {
-        const d = document.getElementById('debug-console');
+        const d = document.getElementById('debug');
         if(d) d.innerText = msg;
-        console.log(msg);
       }
 
-      AFRAME.registerComponent('safe-mode-controller', {
+      // ▼ 画質向上
+      AFRAME.registerComponent('fix-quality', {
+        init: function() {
+            this.el.sceneEl.renderer.setPixelRatio(window.devicePixelRatio);
+        }
+      });
+
+      // ▼ 1. 紙面の波形シェーダー (円形リップル)
+      AFRAME.registerComponent('ripple-shader', {
+        init: function() {
+            const material = new THREE.ShaderMaterial({
+                transparent: true,
+                uniforms: {
+                    uTime: { value: 0 },
+                    uAudio: { value: 0.0 }
+                },
+                vertexShader: `
+                    varying vec2 vUv;
+                    void main() {
+                        vUv = uv;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    varying vec2 vUv;
+                    uniform float uTime;
+                    uniform float uAudio;
+                    
+                    void main() {
+                        // 中心からの距離
+                        vec2 center = vec2(0.5, 0.5);
+                        float dist = distance(vUv, center);
+                        
+                        // 波紋の計算 (Audioで太さが変わる)
+                        float wave = sin(dist * 40.0 - uTime * 5.0);
+                        float circle = smoothstep(0.01, 0.0, abs(wave) - (uAudio * 0.5));
+                        
+                        // 外側は消す
+                        float mask = 1.0 - smoothstep(0.4, 0.5, dist);
+                        
+                        // 色: 赤と白
+                        vec3 color = mix(vec3(1.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0), uAudio);
+                        
+                        gl_FragColor = vec4(color, circle * mask * 0.8);
+                    }
+                `
+            });
+            const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+            this.el.setObject3D('mesh', mesh);
+            this.material = material;
+        },
+        tick: function(t) {
+            if(this.material) {
+                this.material.uniforms.uTime.value = t / 1000;
+                // グローバル変数から音量をもらう
+                this.material.uniforms.uAudio.value = window.currentLevel || 0;
+            }
+        }
+      });
+
+      // ▼ 2. ズーム演出用オーバーレイ (漫画の集中線)
+      AFRAME.registerComponent('zoom-overlay', {
+        init: function() {
+            // カメラの目の前に置く黒いドーナツ状の影
+            const material = new THREE.ShaderMaterial({
+                transparent: true,
+                uniforms: { uAudio: { value: 0.0 } },
+                vertexShader: `
+                    varying vec2 vUv;
+                    void main() {
+                        vUv = uv;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    varying vec2 vUv;
+                    uniform float uAudio;
+                    void main() {
+                        float dist = distance(vUv, vec2(0.5));
+                        // 音が大きいときほど、穴が小さくなる（＝視界が狭まる＝ズーム感）
+                        float holeSize = 0.6 - (uAudio * 0.3);
+                        float vignette = smoothstep(holeSize, 1.0, dist);
+                        gl_FragColor = vec4(0.0, 0.0, 0.0, vignette * 0.9);
+                    }
+                `
+            });
+            // カメラの全面を覆う板
+            const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+            this.el.setObject3D('mesh', mesh);
+            this.material = material;
+        },
+        tick: function() {
+            if(this.material) this.material.uniforms.uAudio.value = window.currentLevel || 0;
+        }
+      });
+
+      // ▼ メイン制御
+      AFRAME.registerComponent('live-director', {
         init: function () {
-            log("System Ready. Waiting for Start...");
-            
-            // 要素の取得
             this.audioEl = document.querySelector('#bgm');
             this.model = document.querySelector('#band-model');
-            this.fxBtn = document.querySelector('#fx-btn');
-            this.videoEl = null; // まだ取得しない
-            
             this.isPlaying = false;
-            this.isFxOn = false; // FXは最初OFF
             
             const scene = this.el.sceneEl;
             const target = document.querySelector('#target-entity');
 
-            // 1. AR準備完了
-            scene.addEventListener("arReady", () => {
-                log("Camera Ready. Scan now.");
-                this.videoEl = document.querySelector('video');
-            });
-
-            // 2. 認識イベント
+            // 認識イベント
             target.addEventListener("targetFound", () => {
-                if (this.isPlaying) return; // すでに再生中なら何もしない
-                
-                log("Target FOUND! Starting Base...");
-                this.startBaseExperience();
-            });
-
-            // FXボタンクリックイベント
-            this.fxBtn.addEventListener('click', () => {
-                this.isFxOn = true;
-                this.fxBtn.style.display = 'none'; // ボタン消す
-                log("FX ENABLED! Camera should shake.");
+                log("FOUND! Starting...");
+                if (!this.isPlaying) {
+                    this.startSequence();
+                }
             });
         },
 
-        startBaseExperience: function() {
+        startSequence: function() {
             this.isPlaying = true;
-            
-            // ① モデル表示 (アニメーションなしで確実にドンと出す)
-            this.model.setAttribute('visible', true);
-            this.model.setAttribute('scale', '1 1 1'); 
 
-            // ② 音楽再生
-            this.audioEl.play()
-                .then(() => {
-                    log("Music Playing. Tap button for FX.");
-                    // FXボタンを表示
-                    this.fxBtn.style.display = 'block';
-                    this.startLoop();
-                })
-                .catch((e) => {
-                    log("Audio Error: " + e);
-                    // 音が出なくてもFXボタンは出す
-                    this.fxBtn.style.display = 'block';
-                    this.startLoop();
-                });
+            // ① モデル表示
+            this.model.setAttribute('visible', true);
+            
+            // ② 音楽再生 (エラーハンドリング付き)
+            this.audioEl.play().then(() => {
+                log("Music Start!");
+                this.startAnalysis();
+            }).catch(e => {
+                log("Audio Blocked. Tap screen!");
+                // 音が出なくても映像は動かす
+                this.startAnalysis(true);
+            });
         },
 
-        startLoop: function() {
+        startAnalysis: function(silent = false) {
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
-            let analyser = null;
-            let data = null;
+            let analyser, data;
 
-            // 音声解析の準備
-            try {
+            if (!silent) {
                 const src = ctx.createMediaElementSource(this.audioEl);
                 analyser = ctx.createAnalyser();
                 analyser.fftSize = 256;
                 src.connect(analyser);
                 analyser.connect(ctx.destination);
                 data = new Uint8Array(analyser.frequencyBinCount);
-            } catch(e) {
-                console.log("AudioContext setup failed (safari?)");
             }
 
-            // ループ処理
             const loop = () => {
                 requestAnimationFrame(loop);
                 
                 let level = 0;
-                if (analyser && data) {
+                if (!silent && analyser) {
                     analyser.getByteFrequencyData(data);
                     let bass = 0;
                     for(let i=0; i<5; i++) bass += data[i];
                     level = bass / 5 / 255; 
                 } else {
-                    // 音が取れない時のデモ用揺れ
-                    level = (Math.sin(Date.now() / 200) + 1) * 0.3;
+                    // デモ用（音がない時）
+                    level = (Math.sin(Date.now() / 150) + 1) * 0.4;
                 }
 
-                // ベース演出：モデル回転（これは常に動くはず）
+                // しきい値処理（キレを良くする）
+                if (level < 0.2) level = 0;
+                else level = (level - 0.2) * 2.5; // 増幅
+
+                // グローバル変数に入れて各シェーダーに渡す
+                window.currentLevel = level;
+
+                // モデルの動き
                 if(this.model) {
-                    this.model.object3D.rotation.y += 0.02;
+                    const s = 1.0 + (level * 0.3);
+                    this.model.object3D.scale.set(s, s, s);
+                    this.model.object3D.rotation.y += 0.02 + (level * 0.05);
                 }
 
-                // ★ここが問題の箇所：FXがONの時だけカメラをいじる
-                if (this.isFxOn && this.videoEl) {
-                    // 感度調整
-                    if (level < 0.2) level = 0;
-                    const scale = 1.0 + (level * 0.4);
-                    this.videoEl.style.transform = `scale(${scale})`;
-                }
+                // バイブレーション
+                if (level > 0.8 && navigator.vibrate) navigator.vibrate(40);
             };
             loop();
         }
@@ -170,6 +226,7 @@
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             ctx.resume().then(() => {
                 document.getElementById('overlay').style.display = 'none';
+                log("Ready to Scan");
             });
         });
       };
@@ -178,17 +235,16 @@
   <body>
 
     <div id="overlay">
-        <h1>SAFETY START</h1>
-        <p>TAP TO START</p>
-        <button id="enter-btn">START</button>
+        <h1>LIVE AR</h1>
+        <p>VOLUME MAX</p>
+        <button id="enter-btn">ENTER</button>
     </div>
 
-    <div id="fx-btn">ENABLE VIBRATION FX</div>
-
-    <div id="debug-console">Init...</div>
+    <div id="debug">Init...</div>
 
     <a-scene 
-      safe-mode-controller
+      fix-quality
+      live-director
       mindar-image="imageTargetSrc: ./targets.mind; uiLoading: no; uiScanning: no; filterMinCF:0.0001; filterBeta: 0.001;" 
       color-space="sRGB" 
       renderer="colorManagement: true, physicallyCorrectLights: true;" 
@@ -200,13 +256,17 @@
         <audio id="bgm" src="./music.m4a" preload="auto" crossorigin="anonymous"></audio>
       </a-assets>
 
-      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+      <a-camera position="0 0 0" look-controls="enabled: false">
+          <a-entity zoom-overlay position="0 0 -0.5"></a-entity>
+      </a-camera>
 
       <a-light type="ambient" intensity="1"></a-light>
-      <a-light type="directional" intensity="2" position="1 2 2"></a-light>
+      <a-light type="directional" intensity="3" position="1 2 2"></a-light>
 
       <a-entity id="target-entity" mindar-image-target="targetIndex: 0">
         
+        <a-entity ripple-shader position="0 0 0.01"></a-entity>
+
         <a-entity id="band-model" 
                   gltf-model="#modelAsset" 
                   rotation="-90 180 0" 
