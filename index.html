@@ -2,17 +2,15 @@
 <html>
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LIVE AR EXPERIENCE</title>
+    <title>LIVE AR - VIBE CHECK</title>
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
     
     <style>
-      body { margin: 0; overflow: hidden; font-family: sans-serif; }
+      body { margin: 0; overflow: hidden; font-family: sans-serif; background: black;}
       
-      /* ▼ MindARの標準ローディング画面をCSSで強制的に消す（これが諸悪の根源） */
-      .mindar-ui-loading, .mindar-ui-scanning {
-        display: none !important;
-      }
+      /* UI除去 */
+      .mindar-ui-loading, .mindar-ui-scanning { display: none !important; }
 
       /* スタート画面 */
       #overlay {
@@ -22,90 +20,63 @@
         color: white; text-align: center;
       }
       #enter-btn {
-        padding: 15px 40px; font-size: 18px; font-weight: bold; letter-spacing: 2px;
-        background: white; color: black; border: none; cursor: pointer; margin-top: 20px;
-        text-transform: uppercase;
+        padding: 15px 40px; font-size: 24px; font-weight: 900; letter-spacing: 4px;
+        background: white; color: black; border: none; cursor: pointer; margin-top: 30px;
+        text-transform: uppercase; clip-path: polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%);
       }
-      
-      /* デバッグログ */
-      #debug-log {
-        position: absolute; top: 10px; left: 10px; color: #00ff00; z-index: 1000;
-        background: rgba(0,0,0,0.7); padding: 5px; pointer-events: none;
-        font-size: 12px; font-family: monospace;
-      }
+      #status { position: absolute; top:10px; left:10px; color:#0f0; font-family:monospace; font-size:10px; z-index:1000; pointer-events:none;}
     </style>
 
     <script>
-      function log(text) {
-        const el = document.getElementById('debug-log');
-        if(el) el.innerHTML = text;
-        console.log(text);
-      }
-
-      // ▼ 画質向上コンポーネント（Retina対応）
-      AFRAME.registerComponent('high-quality', {
+      // ▼ オーディオリアクティブ・エフェクト（足元の演出）
+      AFRAME.registerComponent('audio-ring', {
         init: function () {
-            // シーンのレンダラーを取得
-            const scene = this.el.sceneEl;
-            // ピクセル比をデバイスの最大値に合わせる（これでiPhoneでもクッキリする）
-            scene.renderer.setPixelRatio(window.devicePixelRatio);
-            scene.renderer.antialias = true;
-            log("High Quality Mode: ON ✨");
-        }
-      });
-
-      // ▼ 紙面シェーダー
-      AFRAME.registerComponent('distorted-paper', {
-        schema: { src: {type: 'map'} },
-        init: function () {
-          // 見開き比率 1 : 0.67
-          const geometry = new THREE.PlaneGeometry(1, 0.67, 64, 64); 
-          const texture = new THREE.TextureLoader().load(this.data.src.src); 
-          // テクスチャの画質設定（ボヤけ防止）
-          texture.minFilter = THREE.LinearFilter;
-          texture.magFilter = THREE.LinearFilter;
-          texture.anisotropy = 16; // 異方性フィルタリング最大
-
-          const material = new THREE.ShaderMaterial({
-            wireframe: false,
-            transparent: true,
-            uniforms: {
-              uTime: { value: 0 },
-              uAudio: { value: 0.0 },
-              uTexture: { value: texture }
-            },
-            vertexShader: `
-              varying vec2 vUv;
-              uniform float uTime;
-              uniform float uAudio;
-              void main() {
-                vUv = uv;
-                vec3 pos = position;
-                float d = distance(uv, vec2(0.5));
-                float mask = smoothstep(0.5, 0.1, d); 
-                float wave = sin(pos.x * 12.0 + uTime * 6.0) * cos(pos.y * 12.0 + uTime * 5.0);
-                pos.z += wave * uAudio * 0.3 * mask; 
-                gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-              }
-            `,
-            fragmentShader: `
-              varying vec2 vUv;
-              uniform sampler2D uTexture;
-              uniform float uAudio;
-              void main() {
-                vec4 color = texture2D(uTexture, vUv);
-                color.rgb += uAudio * 0.3;
-                gl_FragColor = color;
-              }
-            `
-          });
+          // リング状のメッシュを作成
+          const geometry = new THREE.RingGeometry(0.3, 0.35, 32);
+          const material = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5, side: THREE.DoubleSide });
           this.mesh = new THREE.Mesh(geometry, material);
           this.el.setObject3D('mesh', this.mesh);
         },
-        tick: function (time, timeDelta) {
+        tick: function () {
           if (!this.mesh) return;
-          this.mesh.material.uniforms.uTime.value = time / 1000;
-          this.mesh.material.uniforms.uAudio.value = window.currentAudioLevel || 0;
+          // 音量に合わせてリングが拡大縮小＆明滅
+          const level = window.currentAudioLevel || 0;
+          const scale = 1 + level * 2.0; // 結構派手に動かす
+          this.mesh.scale.set(scale, scale, 1);
+          this.mesh.material.opacity = 0.2 + level * 0.8;
+        }
+      });
+
+      // ▼ 【重要】カメラワーク制御（K-Pop風ズーム）
+      AFRAME.registerComponent('beat-camera', {
+        init: function() {
+            this.camera = this.el;
+            this.baseZoom = 1.0;
+        },
+        tick: function() {
+            const level = window.currentAudioLevel || 0;
+            
+            // 音が大きいとき、カメラのZoom値をいじる
+            // 1.0 (通常) 〜 1.4 (最大ズーム)
+            // 閾値(0.1)以下のノイズは無視
+            let targetZoom = 1.0;
+            if (level > 0.1) {
+                targetZoom = 1.0 + (level * 0.6); 
+            }
+
+            // 滑らかに追従させる（Lerp）
+            // 数値を大きくするとビビッドに、小さくするとヌルッと動く
+            this.camera.setAttribute('camera', 'zoom', 
+                this.camera.components.camera.data.zoom * 0.8 + targetZoom * 0.2
+            );
+
+            // さらに振動（手ブレ）を加える
+            if (level > 0.4) {
+                const shake = (Math.random() - 0.5) * 0.05 * level;
+                this.camera.object3D.position.x = shake;
+            } else {
+                this.camera.object3D.position.x = 0;
+            }
         }
       });
 
@@ -114,43 +85,37 @@
         init: function () {
             this.audioEl = document.querySelector('#bgm');
             this.model = document.querySelector('#band-model');
+            this.ring = document.querySelector('#effect-ring');
             this.hasStarted = false;
 
             const scene = document.querySelector('a-scene');
             
-            // MindARの準備ができたらグルグルを消す
-            scene.addEventListener("arReady", () => {
-                log("Camera Ready. Waiting for UI...");
-            });
-
             scene.addEventListener("targetFound", () => {
-                if (!window.isAudioUnlocked) {
-                    log("Please TAP BUTTON first!");
-                    return;
-                }
-                if (!this.hasStarted) {
+                if (window.isAudioUnlocked && !this.hasStarted) {
                     this.startShow();
+                } else if(!window.isAudioUnlocked) {
+                    document.getElementById('status').innerText = "TAP BUTTON FIRST!";
                 }
-            });
-            
-            scene.addEventListener("targetLost", () => {
-                 if(this.hasStarted) log("Target Lost (Music playing)");
             });
         },
 
         startShow: function() {
             this.hasStarted = true;
-            log("Target Found! STARTING...");
+            document.getElementById('status').innerText = "LIVE ON AIR";
             
             this.audioEl.play();
             
+            // モデル出現アニメーション
             this.model.setAttribute('visible', true);
+            this.ring.setAttribute('visible', true);
+            
             let s = 0;
             const timer = setInterval(() => {
                 s += 0.05;
+                // モデルのスケール
                 this.model.setAttribute('scale', `${s} ${s} ${s}`);
                 if (s >= 1.0) clearInterval(timer);
-            }, 30);
+            }, 20); // 少し高速に
 
             this.analyzeAudio();
         },
@@ -168,22 +133,26 @@
                 requestAnimationFrame(loop);
                 analyser.getByteFrequencyData(dataArray);
                 let sum = 0;
-                for(let i=0; i<8; i++) sum += dataArray[i];
-                window.currentAudioLevel = (sum / 8 / 255); 
+                // 低音域重視
+                for(let i=0; i<6; i++) sum += dataArray[i]; 
+                window.currentAudioLevel = (sum / 6 / 255); // 0.0 ~ 1.0
+                
+                // Androidバイブレーション（強め）
+                if (window.currentAudioLevel > 0.5 && navigator.vibrate) {
+                    navigator.vibrate(40);
+                }
             };
             loop();
         }
       });
 
       window.onload = () => {
-        const btn = document.getElementById('enter-btn');
-        btn.addEventListener('click', () => {
-            // 音声ロック解除
+        document.getElementById('enter-btn').addEventListener('click', () => {
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             ctx.resume().then(() => {
                 window.isAudioUnlocked = true;
                 document.getElementById('overlay').style.display = 'none';
-                log("Ready! Scan the newspaper!");
+                document.getElementById('status').innerText = "SCAN TARGET";
             });
         });
       };
@@ -192,41 +161,39 @@
   <body>
 
     <div id="overlay">
-        <h1>LIVE AR</h1>
-        <p>Turn up volume</p>
-        <button id="enter-btn">START CAMERA</button>
+        <h1 style="font-size:40px; margin:0; line-height:1;">LIVE<br><span style="color:red">AR</span></h1>
+        <p style="font-size:12px; opacity:0.7;">VOLUME MAX RECOMMENDED</p>
+        <button id="enter-btn">ENTER</button>
     </div>
-    <div id="debug-log">Initializing...</div>
+    <div id="status">INIT...</div>
 
     <a-scene 
-      high-quality
       mindar-image="imageTargetSrc: ./targets.mind; uiLoading: no; uiScanning: no; filterMinCF:0.0001; filterBeta: 0.001;" 
       color-space="sRGB" 
-      renderer="colorManagement: true, physicallyCorrectLights: true; antialias: true; alpha: true;" 
+      renderer="colorManagement: true, physicallyCorrectLights: true; antialias: true; highRefreshRate: true;" 
       vr-mode-ui="enabled: false" 
       device-orientation-permission-ui="enabled: false">
       
       <a-assets>
         <a-asset-item id="modelAsset" src="./scene.gltf"></a-asset-item>
         <audio id="bgm" src="./music.m4a" preload="auto" crossorigin="anonymous"></audio>
-        <img id="paperTex" src="./asako_qr_1.png" />
       </a-assets>
 
-      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+      <a-camera position="0 0 0" look-controls="enabled: false" beat-camera></a-camera>
       
       <a-entity app-controller></a-entity>
 
-      <a-light type="ambient" intensity="0.8"></a-light>
-      <a-light type="directional" intensity="2" position="2 4 5" color="#ffaa00"></a-light>
-      <a-light type="spot" intensity="5" position="0 5 0" angle="45" penumbra="0.5" color="#ff0000"></a-light>
+      <a-light type="ambient" intensity="0.5"></a-light>
+      <a-light type="spot" intensity="10" position="0 5 2" angle="30" penumbra="1" color="#ff0055"></a-light>
+      <a-light type="point" intensity="5" position="-2 2 2" color="#00aaff"></a-light>
 
       <a-entity mindar-image-target="targetIndex: 0">
         
-        <a-entity distorted-paper="src: #paperTex" position="0 0 0.01"></a-entity>
+        <a-entity id="effect-ring" audio-ring position="0 0 0.01" visible="false"></a-entity>
         
         <a-entity id="band-model" 
                   gltf-model="#modelAsset" 
-                  rotation="0 45 180" 
+                  rotation="-90 180 0" 
                   position="0 0 0" 
                   scale="0 0 0" 
                   visible="false">
