@@ -2,53 +2,78 @@
 <html>
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LIVE AR EXPERIENCE</title>
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
     
+    <style>
+      body { margin: 0; overflow: hidden; font-family: sans-serif; }
+      
+      /* 全画面スタートボタン (これで確実に音を出させる) */
+      #overlay {
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0,0,0,0.85); z-index: 9999;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        color: white; text-align: center;
+      }
+      #enter-btn {
+        padding: 15px 40px; font-size: 18px; font-weight: bold; letter-spacing: 2px;
+        background: white; color: black; border: none; cursor: pointer; margin-top: 20px;
+      }
+      
+      /* デバッグログ（動作確認用） */
+      #debug-log {
+        position: absolute; top: 10px; left: 10px; color: yellow; z-index: 1000;
+        background: rgba(0,0,0,0.5); padding: 5px; pointer-events: none;
+        font-size: 12px;
+      }
+    </style>
+
     <script>
-      // ▼ 紙面を歪ませるシェーダー（画像テクスチャ対応・グリッドなし）
+      // ▼ ログ表示用
+      function log(text) {
+        const el = document.getElementById('debug-log');
+        if(el) el.innerHTML = text;
+        console.log(text);
+      }
+
+      // ▼ 紙面を歪ませるシェーダー
       AFRAME.registerComponent('distorted-paper', {
         schema: {
-          src: {type: 'map'}, // 画像を受け取る設定
+          src: {type: 'map'}, 
         },
         init: function () {
-          this.audioLevel = 0;
-
-          // 1. 平面を作成
-          const geometry = new THREE.PlaneGeometry(1, 1, 64, 64); 
+          // ★修正ポイント: 新聞見開き（30段）の比率に合わせる
+          // 横764mm : 縦514mm ≒ 1 : 0.67
+          const geometry = new THREE.PlaneGeometry(1, 0.67, 64, 64); 
           
-          // 2. 画像をテクスチャとして読み込み
-          // A-Frameのシステム経由で画像を取得
           const texture = new THREE.TextureLoader().load(this.data.src.src); 
           
           const material = new THREE.ShaderMaterial({
-            wireframe: false, // ★ここでグリッドを消す！
+            wireframe: false,
             transparent: true,
             uniforms: {
               uTime: { value: 0 },
               uAudio: { value: 0.0 },
-              uTexture: { value: texture } // シェーダーに画像を渡す
+              uTexture: { value: texture }
             },
             vertexShader: `
               varying vec2 vUv;
               uniform float uTime;
               uniform float uAudio;
-
+              
               void main() {
                 vUv = uv;
                 vec3 pos = position;
                 
-                // 中心からの距離
                 float d = distance(uv, vec2(0.5));
+                float mask = smoothstep(0.5, 0.1, d); // 端っこは揺らさない
                 
-                // 音に合わせて波打つ（Z軸方向）
-                // 紙の端っこ(d>0.4)は揺らさないことで、現実の紙と馴染ませる
-                float mask = smoothstep(0.5, 0.2, d); 
+                // 揺れの計算
+                float wave = sin(pos.x * 10.0 + uTime * 6.0) * cos(pos.y * 10.0 + uTime * 5.0);
                 
-                float wave = sin(pos.x * 12.0 + uTime * 5.0) * cos(pos.y * 12.0 + uTime * 4.0);
-                
-                // 音量(uAudio)に応じて揺れ幅を変える
-                pos.z += wave * uAudio * 0.4 * mask; 
+                // Z軸（高さ）を変化させる
+                pos.z += wave * uAudio * 0.3 * mask; 
                 
                 gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
               }
@@ -59,12 +84,9 @@
               uniform float uAudio;
               
               void main() {
-                // 画像の色をそのまま表示
                 vec4 color = texture2D(uTexture, vUv);
-                
-                // 音に合わせて少し明るくする（発光演出）
-                color.rgb += uAudio * 0.15;
-                
+                // 音に合わせて発光
+                color.rgb += uAudio * 0.3;
                 gl_FragColor = color;
               }
             `
@@ -77,62 +99,56 @@
         tick: function (time, timeDelta) {
           if (!this.mesh) return;
           this.mesh.material.uniforms.uTime.value = time / 1000;
-          this.mesh.material.uniforms.uAudio.value += (this.audioLevel - this.mesh.material.uniforms.uAudio.value) * 0.1;
-        },
-
-        updateAudioLevel: function(level) {
-            this.audioLevel = level;
+          // 外部から代入されたオーディオレベルを反映
+          this.mesh.material.uniforms.uAudio.value = window.currentAudioLevel || 0;
         }
       });
 
-      // ▼ コントローラー（タップ→出現→再生）
-      AFRAME.registerComponent('live-controller', {
+      // ▼ メイン制御
+      AFRAME.registerComponent('app-controller', {
         init: function () {
             this.audioEl = document.querySelector('#bgm');
             this.model = document.querySelector('#band-model');
-            this.paper = document.querySelector('#paper-plane');
-            this.startBtn = document.querySelector('#start-button');
-            this.isPlaying = false;
-            
-            this.startBtn.addEventListener('click', () => {
-                this.startSequence();
-            });
+            this.hasStarted = false;
 
+            // マーカー認識イベント
             const scene = document.querySelector('a-scene');
-            scene.addEventListener("targetFound", () => {
-                if(!this.isPlaying) {
-                    this.startBtn.style.display = 'block';
-                    this.startBtn.innerText = "TAP TO START LIVE";
-                }
-            });
-            scene.addEventListener("targetLost", () => {
-                this.startBtn.style.display = 'none';
-                if(this.isPlaying) this.audioEl.pause();
-            });
-        },
-
-        startSequence: function() {
-            this.isPlaying = true;
-            this.startBtn.style.display = 'none';
-
-            // 1. モデルを表示
-            this.model.setAttribute('visible', true);
             
-            // 2. 拡大アニメーション (0 -> 1.0)
-            // ※モデルサイズが大きすぎる場合は if (scale >= 0.5) とかにしてください
-            let scale = 0;
-            const grow = setInterval(() => {
-                scale += 0.05; 
-                this.model.setAttribute('scale', `${scale} ${scale} ${scale}`);
-                if (scale >= 1.0) { 
-                    clearInterval(grow);
-                    this.startMusic();
+            scene.addEventListener("targetFound", () => {
+                log("Status: Target Found! 🎯");
+                if (window.isAudioUnlocked && !this.hasStarted) {
+                    this.startShow();
+                } else if (!window.isAudioUnlocked) {
+                    log("Please tap Start button first");
                 }
-            }, 30);
+            });
+
+            scene.addEventListener("targetLost", () => {
+                log("Status: Searching... 🔍");
+            });
         },
 
-        startMusic: function() {
+        startShow: function() {
+            this.hasStarted = true;
+            log("Status: SHOW START 🎸");
+            
+            // 音楽再生
             this.audioEl.play();
+            
+            // モデル出現アニメーション
+            this.model.setAttribute('visible', true);
+            let s = 0;
+            const timer = setInterval(() => {
+                s += 0.05;
+                this.model.setAttribute('scale', `${s} ${s} ${s}`);
+                if (s >= 1.0) clearInterval(timer);
+            }, 30);
+
+            // オーディオ解析開始
+            this.analyzeAudio();
+        },
+
+        analyzeAudio: function() {
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             const ctx = new AudioContext();
             const src = ctx.createMediaElementSource(this.audioEl);
@@ -140,35 +156,50 @@
             analyser.fftSize = 256;
             src.connect(analyser);
             analyser.connect(ctx.destination);
+            
             const dataArray = new Uint8Array(analyser.frequencyBinCount);
             
             const loop = () => {
                 requestAnimationFrame(loop);
                 analyser.getByteFrequencyData(dataArray);
                 let sum = 0;
-                for(let i=0; i<10; i++) sum += dataArray[i];
-                let avg = sum / 10 / 255;
+                // 低音域(Bass)を取得
+                for(let i=0; i<8; i++) sum += dataArray[i];
+                let avg = sum / 8 / 255; 
                 
-                this.paper.components['distorted-paper'].updateAudioLevel(avg);
+                // グローバル変数に入れてシェーダーに渡す
+                window.currentAudioLevel = avg;
+                
+                // 振動 (Android)
                 if (avg > 0.6 && navigator.vibrate) navigator.vibrate(50);
             };
             loop();
         }
       });
-    </script>
 
-    <style>
-      body { margin: 0; overflow: hidden; }
-      #start-button {
-        position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
-        padding: 12px 24px; background: rgba(0,0,0,0.8); color: white; border: 1px solid white; 
-        font-family: sans-serif; letter-spacing: 1px; border-radius: 4px;
-        display: none; z-index: 999; cursor: pointer;
-      }
-    </style>
+      // ▼ 最初のボタン操作
+      window.onload = () => {
+        document.getElementById('enter-btn').addEventListener('click', () => {
+            // ここでAudioContextを一度触ってロック解除する
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            const ctx = new AudioContext();
+            ctx.resume().then(() => {
+                window.isAudioUnlocked = true;
+                document.getElementById('overlay').style.display = 'none';
+                log("Status: Ready to Scan! 📸");
+            });
+        });
+      };
+    </script>
   </head>
   <body>
-    <button id="start-button">SCANNING...</button>
+    <div id="overlay">
+        <h1>LIVE AR</h1>
+        <p>Turn on sound & Allow Camera</p>
+        <button id="enter-btn">ENTER LIVE</button>
+    </div>
+
+    <div id="debug-log">Status: Initializing...</div>
 
     <a-scene 
       mindar-image="imageTargetSrc: ./targets.mind; uiScanning: no; filterMinCF:0.0001; filterBeta: 0.001;" 
@@ -180,29 +211,7 @@
       <a-assets>
         <a-asset-item id="modelAsset" src="./scene.gltf"></a-asset-item>
         <audio id="bgm" src="./music.m4a" preload="auto" crossorigin="anonymous"></audio>
-        
         <img id="paperTex" src="./asako_qr_1.png" />
       </a-assets>
 
-      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
-      <a-entity live-controller></a-entity>
-
-      <a-light type="ambient" intensity="1.2"></a-light>
-      <a-light type="directional" intensity="1.5" position="2 4 2"></a-light>
-
-      <a-entity mindar-image-target="targetIndex: 0">
-        
-        <a-entity id="paper-plane" distorted-paper="src: #paperTex" position="0 0 0.01"></a-entity>
-        
-        <a-entity id="band-model" 
-                  gltf-model="#modelAsset" 
-                  rotation="0 45 180" 
-                  position="0 0 0" 
-                  scale="0 0 0"
-                  visible="false">
-        </a-entity>
-        
-      </a-entity>
-    </a-scene>
-  </body>
-</html>
+      <a-camera position="0 0 0" look-controls
