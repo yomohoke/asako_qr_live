@@ -3,164 +3,231 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <title>Asahi Ad Award - Live AR</title>
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
     
     <style>
-      body { margin: 0; overflow: hidden; background-color: #000; }
-      
-      /* 全画面オーバーレイ（暗転とフラッシュ用） */
-      #screen-effect {
-        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-        background: black; z-index: 999; pointer-events: none; opacity: 1;
-        transition: opacity 0.5s ease;
-      }
-
-      /* スタートボタン */
+      /* 映画のようなオープニングUI */
+      body { margin: 0; overflow: hidden; background: #000; }
       #overlay {
         position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-        display: flex; justify-content: center; align-items: center;
-        z-index: 1000; background: black;
+        background: black; z-index: 9999; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; transition: opacity 1s ease;
       }
       #start-btn {
-        padding: 20px 40px; border: 2px solid #fff; background: none;
-        color: white; font-size: 1.2rem; cursor: pointer; letter-spacing: 0.3em;
+        padding: 15px 40px; border: 1px solid rgba(255,255,255,0.5);
+        background: transparent; color: white; font-family: sans-serif;
+        font-size: 1.2rem; letter-spacing: 0.3em; cursor: pointer;
+        transition: all 0.3s; text-transform: uppercase;
+      }
+      #start-btn:active { background: white; color: black; transform: scale(0.95); }
+      .instruction { margin-top: 20px; color: #888; font-size: 0.8rem; font-family: sans-serif; }
+      
+      /* スキャン中のガイド */
+      #scanning-ui {
+        position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        width: 60vw; height: 60vw; border: 2px dashed rgba(255,255,255,0.3);
+        border-radius: 10px; pointer-events: none; display: none; z-index: 10;
       }
     </style>
 
     <script>
-      // 1. オーディオ解析（音量データを全体に共有）
-      AFRAME.registerSystem('audio-system', {
-        init: function () { this.bass = 0; this.analyser = null; },
-        setup: function (audio) {
-          const ctx = new (window.AudioContext || window.webkitAudioContext)();
-          const src = ctx.createMediaElementSource(audio);
-          this.analyser = ctx.createAnalyser();
-          this.analyser.fftSize = 256;
-          src.connect(this.analyser);
-          this.analyser.connect(ctx.destination);
-          this.data = new Uint8Array(this.analyser.frequencyBinCount);
+      // ▼ システム：オーディオ解析と状態管理
+      AFRAME.registerSystem('live-controller', {
+        init: function () {
+          this.audio = null;
+          this.analyser = null;
+          this.dataArray = null;
+          this.volume = 0; // 現在の音量（演出用）
+          this.isPlaying = false;
         },
-        tick: function () {
-          if (!this.analyser) return;
-          this.analyser.getByteFrequencyData(this.data);
-          let sum = 0;
-          for (let i = 0; i < 10; i++) sum += this.data[i];
-          this.bass = sum / 10 / 255; // 0.0 ~ 1.0
+        
+        // ユーザーがボタンを押した時に呼ばれる（iOS対策）
+        setupAudio: function (audioId) {
+          this.audio = document.querySelector(audioId);
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          this.context = new AudioContext();
+          const src = this.context.createMediaElementSource(this.audio);
+          this.analyser = this.context.createAnalyser();
+          this.analyser.fftSize = 128; // 解析精度
+          src.connect(this.analyser);
+          this.analyser.connect(this.context.destination);
+          this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
           
-          // 強い低音でバイブレーション
-          if (this.bass > 0.7 && Math.random() > 0.8) {
-            if (navigator.vibrate) navigator.vibrate(30);
+          // 一瞬だけ無音で再生してOSに許可させるハック
+          this.context.resume();
+        },
+
+        // 認識した時：開演
+        play: function () {
+          if (this.audio && this.context) {
+            this.context.resume();
+            this.audio.currentTime = 0; // 最初から（あるいはループ途中からなら削除）
+            this.audio.play();
+            this.isPlaying = true;
           }
+        },
+
+        // 外れた時：一時停止
+        pause: function () {
+          if (this.audio) {
+            this.audio.pause();
+            this.isPlaying = false;
+            this.volume = 0; // 演出も即カット
+          }
+        },
+
+        tick: function () {
+          if (!this.isPlaying || !this.analyser) return;
+          this.analyser.getByteFrequencyData(this.dataArray);
+          
+          // 低音の平均を取得
+          let sum = 0;
+          for(let i=0; i<5; i++) sum += this.dataArray[i];
+          const rawVolume = sum / 5 / 255; 
+          // スムージング（急激な変化を和らげる）
+          this.volume += (rawVolume - this.volume) * 0.2;
         }
       });
 
-      // 2. ライブ演出全体をコントロールするマネージャー
-      AFRAME.registerComponent('live-manager', {
+      // ▼ コンポーネント：ターゲット認識時の挙動（モデル出現・音楽再生）
+      AFRAME.registerComponent('target-control', {
         init: function () {
-          const el = this.el;
-          const audio = document.querySelector('#bgm');
-          const effect = document.querySelector('#screen-effect');
+          const system = this.el.sceneEl.systems['live-controller'];
+          const model = this.el.querySelector('.live-model');
+          const effects = this.el.querySelector('.live-effects');
 
-          // マーカーを認識した時の処理
-          el.addEventListener('targetFound', () => {
-            console.log("Marker Found: Starting Live!");
+          // マーカー認識時
+          this.el.addEventListener('targetFound', () => {
+            console.log("Live Start!");
+            system.play();
             
-            // 音楽再生
-            audio.play();
-
-            // 画面を一瞬白くして（フラッシュ）、暗転を解除
-            effect.style.transition = 'none';
-            effect.style.backgroundColor = 'white';
-            effect.style.opacity = '1';
-            
+            // モデルのアニメーション（毎回 0 -> 1 に拡大）
+            // A-Frameのanimationコンポーネントをリセットして再生
+            model.setAttribute('visible', true);
+            model.setAttribute('scale', '0 0 0');
             setTimeout(() => {
-              effect.style.transition = 'opacity 2s ease';
-              effect.style.backgroundColor = 'black';
-              effect.style.opacity = '0'; // 徐々にARが見えてくる
+              model.setAttribute('animation', {
+                property: 'scale',
+                to: '0.5 0.5 0.5', // モデルの最終サイズ
+                dur: 800,
+                easing: 'easeOutBack' // 勢いよく飛び出す動き
+              });
             }, 50);
 
-            // モデルの「にゅっ」というアニメーションを開始
-            const model = document.querySelector('#main-model');
-            model.setAttribute('animation', {
-              property: 'scale',
-              from: '0 0 0',
-              to: '1 1 1',
-              dur: 1500,
-              easing: 'easeOutElastic'
-            });
+            effects.setAttribute('visible', true);
           });
 
-          // マーカーを見失った時は音楽を止める（任意）
-          el.addEventListener('targetLost', () => {
-            audio.pause();
+          // マーカーロスト時
+          this.el.addEventListener('targetLost', () => {
+            console.log("Live Pause...");
+            system.pause();
+            
+            // モデルを隠す（次回の出現インパクトのため）
+            model.setAttribute('visible', false);
+            model.removeAttribute('animation'); // アニメーションリセット
+            model.setAttribute('scale', '0 0 0');
+            
+            effects.setAttribute('visible', false);
           });
         }
       });
 
-      // 3. カメラシェイク
-      AFRAME.registerComponent('cam-shaker', {
-        tick: function () {
-          const bass = this.el.sceneEl.systems['audio-system'].bass;
-          if (bass > 0.5) {
-            const intensity = (bass - 0.5) * 0.2;
-            this.el.setAttribute('position', {
-              x: (Math.random() - 0.5) * intensity,
-              y: (Math.random() - 0.5) * intensity + 1.6,
-              z: (Math.random() - 0.5) * intensity
-            });
-          }
+      // ▼ コンポーネント：オーディオリアクティブ・メッシュ（TouchDesigner風）
+      AFRAME.registerComponent('reactive-mesh', {
+        init: function () {
+          const geo = new THREE.SphereGeometry(1, 32, 32);
+          const mat = new THREE.ShaderMaterial({
+            wireframe: true, transparent: true,
+            uniforms: { uTime: { value: 0 }, uVol: { value: 0 } },
+            vertexShader: `
+              varying vec2 vUv; uniform float uTime; uniform float uVol;
+              void main() {
+                vUv = uv; vec3 pos = position;
+                // 音量でスパイクさせる
+                float spike = sin(pos.x * 10.0 + uTime) * cos(pos.y * 10.0);
+                pos += normal * spike * uVol * 0.5; 
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+              }
+            `,
+            fragmentShader: `
+              uniform float uVol;
+              void main() {
+                // 音量で色が激しく明滅
+                vec3 col = mix(vec3(0.0, 0.5, 1.0), vec3(1.0, 0.2, 0.5), uVol);
+                gl_FragColor = vec4(col, 0.5 + uVol * 0.5);
+              }
+            `
+          });
+          this.mesh = new THREE.Mesh(geo, mat);
+          this.el.setObject3D('mesh', this.mesh);
+        },
+        tick: function (t) {
+          const vol = this.el.sceneEl.systems['live-controller'].volume;
+          this.mesh.material.uniforms.uTime.value = t / 1000;
+          this.mesh.material.uniforms.uVol.value = vol;
+          // メッシュ自体を回転
+          this.el.object3D.rotation.y += 0.01;
         }
       });
 
-      // スタートボタンの処理
-      function startExperience() {
-        document.querySelector('#overlay').style.display = 'none';
-        const audio = document.querySelector('#bgm');
-        // iOS対策：ここでAudioContextを初期化
-        document.querySelector('a-scene').systems['audio-system'].setup(audio);
-        // カメラ起動のために一瞬だけ画面を明るく（スキャンしやすくする）
-        document.querySelector('#screen-effect').style.opacity = '0.5';
-      }
+      // ▼ スタートボタン処理
+      window.enterLive = function() {
+        const overlay = document.getElementById('overlay');
+        const scanning = document.getElementById('scanning-ui');
+        
+        // 1. AudioContextのロック解除
+        document.querySelector('a-scene').systems['live-controller'].setupAudio('#bgm');
+        
+        // 2. オーバーレイを消す
+        overlay.style.opacity = 0;
+        setTimeout(() => {
+            overlay.style.display = 'none';
+            scanning.style.display = 'block'; // ガイド枠を表示
+        }, 1000);
+      };
     </script>
   </head>
 
   <body>
-    <div id="screen-effect"></div>
-    
     <div id="overlay">
-      <button id="start-btn" onclick="startExperience()">SCAN THE NEWSPAPER</button>
+      <button id="start-btn" onclick="enterLive()">ENTER LIVE</button>
+      <div class="instruction">音量を上げてお待ちください</div>
     </div>
 
+    <div id="scanning-ui"></div>
+
     <a-scene 
-      mindar-image="imageTargetSrc: ./targets.mind;" 
-      renderer="colorManagement: true, physicallyCorrectLights: true"
-      vr-mode-ui="enabled: false">
+      mindar-image="imageTargetSrc: ./targets.mind; uiScanning: no;" 
+      color-space="sRGB" 
+      renderer="colorManagement: true, physicallyCorrectLights" 
+      vr-mode-ui="enabled: false" 
+      device-orientation-permission-ui="enabled: false">
       
       <a-assets>
-        <a-asset-item id="gltfModel" src="./scene.gltf"></a-asset-item>
+        <a-asset-item id="model" src="./scene.gltf"></a-asset-item>
         <audio id="bgm" src="./music.m4a" preload="auto" loop></audio>
       </a-assets>
 
-      <a-camera position="0 1.6 0" look-controls="enabled: false" cam-shaker></a-camera>
+      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
-      <a-entity mindar-image-target="targetIndex: 0" live-manager>
+      <a-entity mindar-image-target="targetIndex: 0" target-control>
         
-        <a-entity 
-          geometry="primitive: torus; radius: 1; radiusTubular: 0.05" 
-          material="color: #0ff; wireframe: true"
-          position="0 0 -0.5"
-          scale="1 1 1"
-          animation="property: rotation; to: 0 360 0; loop: true; dur: 4000; easing: linear">
-        </a-entity>
-
         <a-gltf-model 
-          id="main-model"
-          src="#gltfModel" 
+          class="live-model" 
+          src="#model" 
+          rotation="90 0 0" 
+          position="0 0 0" 
           scale="0 0 0" 
-          position="0 -0.3 0" 
-          rotation="90 0 0">
+          visible="false">
         </a-gltf-model>
+
+        <a-entity 
+          class="live-effects" 
+          reactive-mesh 
+          visible="false">
+        </a-entity>
 
       </a-entity>
     </a-scene>
