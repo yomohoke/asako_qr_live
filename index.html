@@ -2,23 +2,23 @@
 <html>
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LIVE AR - FINAL</title>
+    <title>LIVE AR - FINAL FIX</title>
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
     
     <style>
       body { margin: 0; overflow: hidden; background: black; font-family: sans-serif; }
       
-      /* ビデオタグ（背景）を動かすための設定 */
+      /* ビデオタグ（背景）を動かす設定 */
       video {
-        transition: transform 0.1s cubic-bezier(0.1, 0.7, 1.0, 0.1); /* ビートに合う動き */
+        transition: transform 0.1s ease-out; 
         transform-origin: center center;
       }
 
-      /* MindARの標準UIを消す */
+      /* MindAR UI消去 */
       .mindar-ui-loading, .mindar-ui-scanning { display: none !important; }
 
-      /* スタート画面（最初から表示しておく） */
+      /* スタート画面 */
       #overlay {
         position: absolute; top: 0; left: 0; width: 100%; height: 100%;
         background: black; z-index: 99999;
@@ -27,79 +27,86 @@
       }
       
       #enter-btn {
-        margin-top: 30px; padding: 20px 60px; 
-        font-size: 24px; font-weight: 900; letter-spacing: 2px;
-        background: white; color: black; border: none; cursor: pointer;
-        clip-path: polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%);
-        text-transform: uppercase;
+        margin-top: 20px; padding: 20px 50px; 
+        font-size: 20px; font-weight: 900; background: white; color: black; border: none;
+        clip-path: polygon(0 0, 100% 0, 100% 80%, 90% 100%, 0 100%);
       }
 
       /* デバッグログ */
       #debug {
         position: absolute; top: 10px; left: 10px; 
-        color: #00ff00; font-family: monospace; font-size: 12px; 
-        background: rgba(0,0,0,0.5); pointer-events: none; z-index: 10000;
+        color: #0f0; font-family: monospace; font-size: 14px; 
+        background: rgba(0,0,0,0.6); padding: 5px; pointer-events: none; z-index: 10000;
       }
     </style>
 
     <script>
-      // ▼ エラー回避のためのログ関数
       function log(msg) {
         const d = document.getElementById('debug');
         if(d) d.innerText = msg;
         console.log(msg);
       }
 
-      // ▼ 画質向上コンポーネント
+      // ▼ 画質向上
       AFRAME.registerComponent('fix-quality', {
         init: function() {
-            // iPhone等のRetinaディスプレイ対応
             this.el.sceneEl.renderer.setPixelRatio(window.devicePixelRatio);
         }
       });
 
-      // ▼ メイン制御システム
+      // ▼ メイン制御
       AFRAME.registerComponent('live-director', {
         init: function () {
             this.audioEl = document.querySelector('#bgm');
             this.model = document.querySelector('#band-model');
-            this.effect = document.querySelector('#effect-group');
-            this.videoEl = null; // まだ取得しない
-            
+            this.debugBox = document.querySelector('#debug-box'); // 赤い箱
+            this.videoEl = null;
             this.isPlaying = false;
             
-            // シーンのイベント設定
             const scene = this.el.sceneEl;
+            
+            // ★重要修正：イベントを受け取る場所を「ターゲット」に限定する
+            const targetEntity = document.querySelector('#target-entity');
 
-            // AR準備完了時にビデオタグを取得（ここなら確実）
+            // AR準備完了
             scene.addEventListener("arReady", () => {
-                log("Camera Ready. Waiting for Target...");
+                log("Status: Camera Ready. Scan Newspaper!");
                 this.videoEl = document.querySelector('video');
             });
 
-            // マーカー認識
-            scene.addEventListener("targetFound", () => {
+            // ★修正：ターゲットが見つかった時
+            targetEntity.addEventListener("targetFound", () => {
+                log("Target FOUND! Starting...");
+                
+                // まず赤い箱を出して「認識したぞ！」と知らせる
+                this.debugBox.setAttribute('visible', true);
+
                 if (!window.audioUnlocked) {
                     log("TAP BUTTON FIRST!");
                     return;
                 }
+                
                 if (!this.isPlaying) {
                     this.startSequence();
                 }
             });
             
-            scene.addEventListener("targetLost", () => {
-                // ロストしても音楽は止めない（ライブ感重視）
-                if(!this.isPlaying) log("Searching...");
+            // ロスト時
+            targetEntity.addEventListener("targetLost", () => {
+                if(!this.isPlaying) log("Status: Searching...");
+                // this.debugBox.setAttribute('visible', false); // デバッグ用なので消さないでおく
             });
         },
 
-        // 演出シーケンス
         startSequence: function() {
             this.isPlaying = true;
-            log("Sequence: 1. GROWING");
+            log("Seq: 1. MUSIC & ZOOM");
 
-            // ① モデル表示 & ニョキッ
+            // いきなり音楽スタート
+            this.audioEl.play();
+            this.startReactivity();
+
+            // モデル表示 & ニョキッ
             this.model.setAttribute('visible', true);
             let s = 0;
             const growTimer = setInterval(() => {
@@ -107,27 +114,16 @@
                 this.model.setAttribute('scale', `${s} ${s} ${s}`);
                 if (s >= 1.0) clearInterval(growTimer);
             }, 20);
-
-            // ② 0.6秒後にエフェクト展開
-            setTimeout(() => {
-                log("Sequence: 2. EFFECT SNAP");
-                this.effect.setAttribute('visible', true);
-            }, 600);
-
-            // ③ 1.0秒後に音楽スタート & リアクティブ開始
-            setTimeout(() => {
-                log("Sequence: 3. MUSIC START!");
-                this.audioEl.play();
-                this.startReactivity();
-            }, 1000);
+            
+            // 赤い箱は邪魔なので消す
+            setTimeout(() => { this.debugBox.setAttribute('visible', false); }, 500);
         },
 
-        // オーディオリアクティブ処理
         startReactivity: function() {
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             const src = ctx.createMediaElementSource(this.audioEl);
             const analyser = ctx.createAnalyser();
-            analyser.fftSize = 512; // 解像度高め
+            analyser.fftSize = 512;
             src.connect(analyser);
             analyser.connect(ctx.destination);
             
@@ -137,31 +133,29 @@
                 requestAnimationFrame(loop);
                 analyser.getByteFrequencyData(data);
 
-                // 低音 (Bass) を取得
+                // 低音 (Bass)
                 let bass = 0;
                 for(let i=0; i<4; i++) bass += data[i];
-                // 0.0 〜 1.0 に正規化
-                let level = bass / 4 / 255;
+                let level = bass / 4 / 255; // 0.0 ~ 1.0
 
-                // しきい値カット (ノイズ無視)
-                if (level < 0.4) level = 0;
-                else level = (level - 0.4) * 2.5; // 残りを増幅
+                // 感度調整 (0.3以下は無視、それ以上を増幅)
+                if (level < 0.3) level = 0;
+                else level = (level - 0.3) * 2.0;
 
-                // A. ビデオ画面自体のズーム (K-Pop風)
-                // 音に合わせて 1.0倍 〜 1.3倍
+                // A. ビデオ画面自体のズーム (最大1.3倍)
                 if (this.videoEl) {
                     const scale = 1.0 + (level * 0.3);
                     this.videoEl.style.transform = `scale(${scale})`;
                 }
 
-                // B. エフェクトの回転
-                this.effect.object3D.rotation.z += 0.02 + (level * 0.1);
-
-                // C. モデルのバウンス
+                // B. モデルのバウンス
                 const mScale = 1.0 + (level * 0.2);
                 this.model.object3D.scale.set(mScale, mScale, mScale);
 
-                // D. バイブレーション (Androidのみ)
+                // C. モデル回転（ノリノリ感）
+                this.model.object3D.rotation.y += 0.01 + (level * 0.05);
+
+                // D. バイブレーション
                 if (level > 0.8 && navigator.vibrate) {
                     navigator.vibrate(30);
                 }
@@ -170,18 +164,15 @@
         }
       });
 
-      // ▼ 起動ボタンの処理 (window.onloadで確実に実行)
       window.onload = () => {
         const btn = document.getElementById('enter-btn');
         const overlay = document.getElementById('overlay');
-        
         btn.addEventListener('click', () => {
-            // オーディオコンテキストをアンロック
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             ctx.resume().then(() => {
                 window.audioUnlocked = true;
-                overlay.style.display = 'none'; // 画面を消す
-                log("Status: Ready to Scan!");
+                overlay.style.display = 'none';
+                log("Status: Ready. Scan now.");
             });
         });
       };
@@ -190,12 +181,12 @@
   <body>
 
     <div id="overlay">
-        <h1 style="font-size:40px; margin:0; line-height:1;">LIVE<br><span style="color:red">AR</span></h1>
-        <p style="font-size:14px; opacity:0.8; margin-top:10px;">VOLUME MAX RECOMMENDED</p>
-        <button id="enter-btn">ENTER LIVE</button>
+        <h1>LIVE AR</h1>
+        <p>VOLUME UP</p>
+        <button id="enter-btn">START</button>
     </div>
     
-    <div id="debug">INIT... (Waiting for Load)</div>
+    <div id="debug">INIT...</div>
 
     <a-scene 
       fix-quality
@@ -213,18 +204,12 @@
 
       <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
-      <a-light type="ambient" intensity="0.5"></a-light>
-      <a-light type="directional" intensity="2" position="1 2 1" color="#ff00aa"></a-light>
-      <a-light type="point" intensity="1" position="-1 1 1" color="#00aaff"></a-light>
+      <a-light type="ambient" intensity="1"></a-light>
+      <a-light type="directional" intensity="2" position="1 2 1"></a-light>
 
-      <a-entity mindar-image-target="targetIndex: 0">
+      <a-entity id="target-entity" mindar-image-target="targetIndex: 0">
         
-        <a-entity id="effect-group" visible="false">
-             <a-ring color="#ff0055" radius-inner="0.6" radius-outer="0.65" opacity="0.8"></a-ring>
-             <a-ring color="#ffffff" radius-inner="0.7" radius-outer="0.71" opacity="0.5"></a-ring>
-             <a-entity rotation="0 0 0"><a-plane color="cyan" height="2" width="0.05" position="0 0 -0.01"></a-plane></a-entity>
-             <a-entity rotation="0 0 90"><a-plane color="cyan" height="2" width="0.05" position="0 0 -0.01"></a-plane></a-entity>
-        </a-entity>
+        <a-box id="debug-box" color="red" position="0 0 0.2" scale="0.5 0.5 0.5" visible="false"></a-box>
 
         <a-entity id="band-model" 
                   gltf-model="#modelAsset" 
