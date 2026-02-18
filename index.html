@@ -2,160 +2,186 @@
 <html>
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LIVE AR - EXTREME</title>
+    <title>LIVE AR - FINAL</title>
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
     
     <style>
-      body { margin: 0; overflow: hidden; background: black; }
+      body { margin: 0; overflow: hidden; background: black; font-family: sans-serif; }
       
-      /* 映像を揺らすためにvideoタグにアクセスしやすくする */
+      /* ビデオタグ（背景）を動かすための設定 */
       video {
-        transition: transform 0.05s linear; /* キビキビ動くように調整 */
+        transition: transform 0.1s cubic-bezier(0.1, 0.7, 1.0, 0.1); /* ビートに合う動き */
         transform-origin: center center;
       }
 
-      /* UI除去 */
+      /* MindARの標準UIを消す */
       .mindar-ui-loading, .mindar-ui-scanning { display: none !important; }
 
-      /* スタート画面 */
+      /* スタート画面（最初から表示しておく） */
       #overlay {
         position: absolute; top: 0; left: 0; width: 100%; height: 100%;
         background: black; z-index: 99999;
         display: flex; flex-direction: column; align-items: center; justify-content: center;
         color: white; text-align: center;
       }
+      
       #enter-btn {
-        padding: 20px 50px; font-size: 20px; font-weight: 900; background: white; color: black; border: none;
-        clip-path: polygon(0 0, 100% 0, 100% 70%, 85% 100%, 0 100%);
+        margin-top: 30px; padding: 20px 60px; 
+        font-size: 24px; font-weight: 900; letter-spacing: 2px;
+        background: white; color: black; border: none; cursor: pointer;
+        clip-path: polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%);
+        text-transform: uppercase;
       }
-      /* デバッグ用：ちゃんと数値が取れてるか確認 */
+
+      /* デバッグログ */
       #debug {
-        position: absolute; top: 10px; left: 10px; color: #0f0; font-family: monospace; font-size: 14px; z-index: 10000;
-        text-shadow: 1px 1px 0 #000;
+        position: absolute; top: 10px; left: 10px; 
+        color: #00ff00; font-family: monospace; font-size: 12px; 
+        background: rgba(0,0,0,0.5); pointer-events: none; z-index: 10000;
       }
     </style>
 
     <script>
-      // ▼ オーディオ解析＆映像ハック
-      AFRAME.registerComponent('audio-reactive-core', {
+      // ▼ エラー回避のためのログ関数
+      function log(msg) {
+        const d = document.getElementById('debug');
+        if(d) d.innerText = msg;
+        console.log(msg);
+      }
+
+      // ▼ 画質向上コンポーネント
+      AFRAME.registerComponent('fix-quality', {
+        init: function() {
+            // iPhone等のRetinaディスプレイ対応
+            this.el.sceneEl.renderer.setPixelRatio(window.devicePixelRatio);
+        }
+      });
+
+      // ▼ メイン制御システム
+      AFRAME.registerComponent('live-director', {
         init: function () {
             this.audioEl = document.querySelector('#bgm');
-            this.videoEl = null; // 後で取得
             this.model = document.querySelector('#band-model');
-            this.effect = document.querySelector('#effect-plane');
-            this.debug = document.getElementById('debug');
+            this.effect = document.querySelector('#effect-group');
+            this.videoEl = null; // まだ取得しない
             
             this.isPlaying = false;
-            this.analyser = null;
-            this.dataArray = null;
-
-            // マーカー認識時のシーケンス制御
-            const scene = document.querySelector('a-scene');
             
-            // MindARのビデオ要素を取得（ここを揺らす！）
+            // シーンのイベント設定
+            const scene = this.el.sceneEl;
+
+            // AR準備完了時にビデオタグを取得（ここなら確実）
             scene.addEventListener("arReady", () => {
+                log("Camera Ready. Waiting for Target...");
                 this.videoEl = document.querySelector('video');
             });
 
+            // マーカー認識
             scene.addEventListener("targetFound", () => {
-                if (window.isAudioUnlocked && !this.isPlaying) {
-                    this.runSequence();
-                } else if(!window.isAudioUnlocked) {
-                    this.debug.innerText = "TAP BUTTON FIRST!";
+                if (!window.audioUnlocked) {
+                    log("TAP BUTTON FIRST!");
+                    return;
                 }
+                if (!this.isPlaying) {
+                    this.startSequence();
+                }
+            });
+            
+            scene.addEventListener("targetLost", () => {
+                // ロストしても音楽は止めない（ライブ感重視）
+                if(!this.isPlaying) log("Searching...");
             });
         },
 
-        runSequence: function() {
+        // 演出シーケンス
+        startSequence: function() {
             this.isPlaying = true;
-            this.debug.innerText = "SEQ: 1. GROWING...";
+            log("Sequence: 1. GROWING");
 
-            // ① モデル表示＆ニョキッと生える (0.5秒)
+            // ① モデル表示 & ニョキッ
             this.model.setAttribute('visible', true);
-            this.model.setAttribute('animation', 'property: scale; from: 0 0 0; to: 1 1 1; dur: 800; easing: easeOutElastic;');
+            let s = 0;
+            const growTimer = setInterval(() => {
+                s += 0.05;
+                this.model.setAttribute('scale', `${s} ${s} ${s}`);
+                if (s >= 1.0) clearInterval(growTimer);
+            }, 20);
 
-            // ② エフェクトがシュンッ！と展開 (モデルの後、0.8秒後)
+            // ② 0.6秒後にエフェクト展開
             setTimeout(() => {
-                this.debug.innerText = "SEQ: 2. EFFECT SNAP!";
+                log("Sequence: 2. EFFECT SNAP");
                 this.effect.setAttribute('visible', true);
-                // スケールを一気に広げるアニメーション
-                this.effect.setAttribute('animation', 'property: scale; from: 0 0 0; to: 1.5 1.5 1.5; dur: 300; easing: easeOutExpo;');
-            }, 800);
+            }, 600);
 
-            // ③ 音楽スタート＆リアクティブ開始 (1.2秒後)
+            // ③ 1.0秒後に音楽スタート & リアクティブ開始
             setTimeout(() => {
-                this.debug.innerText = "SEQ: 3. MUSIC START & VIBE!!";
+                log("Sequence: 3. MUSIC START!");
                 this.audioEl.play();
-                this.startReactiveLoop();
-            }, 1200);
+                this.startReactivity();
+            }, 1000);
         },
 
-        startReactiveLoop: function() {
+        // オーディオリアクティブ処理
+        startReactivity: function() {
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             const src = ctx.createMediaElementSource(this.audioEl);
             const analyser = ctx.createAnalyser();
-            analyser.fftSize = 256; // 解像度
-            analyser.smoothingTimeConstant = 0.3; // 反応をキビキビさせる（デフォルト0.8だと遅い）
+            analyser.fftSize = 512; // 解像度高め
             src.connect(analyser);
             analyser.connect(ctx.destination);
             
-            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            const data = new Uint8Array(analyser.frequencyBinCount);
             
-            const render = () => {
-                requestAnimationFrame(render);
-                analyser.getByteFrequencyData(dataArray);
+            const loop = () => {
+                requestAnimationFrame(loop);
+                analyser.getByteFrequencyData(data);
 
-                // 低音域（Bass）をガッツリ取る
-                let sum = 0;
-                // 0~5番目の周波数（超低音）だけを見る
-                for(let i=0; i<5; i++) sum += dataArray[i];
-                
-                // 平均値 (0.0 ~ 1.0)
-                // ★感度調整: 小さい音は切り捨て、大きい音を強調
-                let rawAvg = sum / 5 / 255; 
-                let level = 0;
-                
-                // しきい値（Threshold）: 0.3以下の音は無視（0にする）
-                if (rawAvg > 0.3) {
-                    level = (rawAvg - 0.3) * 2.0; // 残りを増幅
-                }
+                // 低音 (Bass) を取得
+                let bass = 0;
+                for(let i=0; i<4; i++) bass += data[i];
+                // 0.0 〜 1.0 に正規化
+                let level = bass / 4 / 255;
 
-                // デバッグ表示
-                // this.debug.innerText = `LEVEL: ${level.toFixed(2)}`;
+                // しきい値カット (ノイズ無視)
+                if (level < 0.4) level = 0;
+                else level = (level - 0.4) * 2.5; // 残りを増幅
 
-                // --- 演出への反映 ---
-
-                // 1. ビデオ背景自体のズーム（K-Pop風）
-                // 音がないときは 1.0、音があるときは最大 1.2倍
+                // A. ビデオ画面自体のズーム (K-Pop風)
+                // 音に合わせて 1.0倍 〜 1.3倍
                 if (this.videoEl) {
-                    const zoom = 1.0 + (level * 0.15); 
-                    this.videoEl.style.transform = `scale(${zoom})`;
+                    const scale = 1.0 + (level * 0.3);
+                    this.videoEl.style.transform = `scale(${scale})`;
                 }
 
-                // 2. モデルのサイズ（ベースサイズほぼ0 + 音量）
-                // 音がないと 0.2、音で 1.5 まで巨大化
-                const modelScale = 0.2 + (level * 1.3);
-                this.model.object3D.scale.set(modelScale, modelScale, modelScale);
+                // B. エフェクトの回転
+                this.effect.object3D.rotation.z += 0.02 + (level * 0.1);
 
-                // 3. エフェクト（グリッド）の回転
-                this.effect.object3D.rotation.z += 0.01 + (level * 0.1);
+                // C. モデルのバウンス
+                const mScale = 1.0 + (level * 0.2);
+                this.model.object3D.scale.set(mScale, mScale, mScale);
 
-                // 4. Androidバイブレーション
+                // D. バイブレーション (Androidのみ)
                 if (level > 0.8 && navigator.vibrate) {
                     navigator.vibrate(30);
                 }
             };
-            render();
+            loop();
         }
       });
 
+      // ▼ 起動ボタンの処理 (window.onloadで確実に実行)
       window.onload = () => {
-        document.getElementById('enter-btn').addEventListener('click', () => {
+        const btn = document.getElementById('enter-btn');
+        const overlay = document.getElementById('overlay');
+        
+        btn.addEventListener('click', () => {
+            // オーディオコンテキストをアンロック
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             ctx.resume().then(() => {
-                window.isAudioUnlocked = true;
-                document.getElementById('overlay').style.display = 'none';
+                window.audioUnlocked = true;
+                overlay.style.display = 'none'; // 画面を消す
+                log("Status: Ready to Scan!");
             });
         });
       };
@@ -164,47 +190,47 @@
   <body>
 
     <div id="overlay">
-        <h1>LIVE AR</h1>
-        <p>SOUND ON / MAX VOL</p>
+        <h1 style="font-size:40px; margin:0; line-height:1;">LIVE<br><span style="color:red">AR</span></h1>
+        <p style="font-size:14px; opacity:0.8; margin-top:10px;">VOLUME MAX RECOMMENDED</p>
         <button id="enter-btn">ENTER LIVE</button>
     </div>
-    <div id="debug">INIT...</div>
+    
+    <div id="debug">INIT... (Waiting for Load)</div>
 
     <a-scene 
+      fix-quality
+      live-director
       mindar-image="imageTargetSrc: ./targets.mind; uiLoading: no; uiScanning: no; filterMinCF:0.0001; filterBeta: 0.001;" 
       color-space="sRGB" 
-      renderer="colorManagement: true, physicallyCorrectLights: true;" 
+      renderer="colorManagement: true, physicallyCorrectLights: true; antialias: true;" 
       vr-mode-ui="enabled: false" 
       device-orientation-permission-ui="enabled: false">
       
       <a-assets>
         <a-asset-item id="modelAsset" src="./scene.gltf"></a-asset-item>
         <audio id="bgm" src="./music.m4a" preload="auto" crossorigin="anonymous"></audio>
-        <img id="gridTex" src="./target.png" />
       </a-assets>
 
       <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
-      
-      <a-entity audio-reactive-core></a-entity>
 
-      <a-light type="directional" intensity="3" position="2 4 2" color="#ff0055"></a-light>
       <a-light type="ambient" intensity="0.5"></a-light>
+      <a-light type="directional" intensity="2" position="1 2 1" color="#ff00aa"></a-light>
+      <a-light type="point" intensity="1" position="-1 1 1" color="#00aaff"></a-light>
 
       <a-entity mindar-image-target="targetIndex: 0">
         
-        <a-entity id="effect-plane" visible="false" position="0 0 -0.1">
-            <a-ring color="red" radius-inner="0.5" radius-outer="0.55"></a-ring>
-            <a-ring color="cyan" radius-inner="0.8" radius-outer="0.85"></a-ring>
-            <a-entity rotation="0 0 0"><a-plane color="white" height="2" width="0.02"></a-plane></a-entity>
-            <a-entity rotation="0 0 45"><a-plane color="white" height="2" width="0.02"></a-plane></a-entity>
-            <a-entity rotation="0 0 90"><a-plane color="white" height="2" width="0.02"></a-plane></a-entity>
-            <a-entity rotation="0 0 135"><a-plane color="white" height="2" width="0.02"></a-plane></a-entity>
+        <a-entity id="effect-group" visible="false">
+             <a-ring color="#ff0055" radius-inner="0.6" radius-outer="0.65" opacity="0.8"></a-ring>
+             <a-ring color="#ffffff" radius-inner="0.7" radius-outer="0.71" opacity="0.5"></a-ring>
+             <a-entity rotation="0 0 0"><a-plane color="cyan" height="2" width="0.05" position="0 0 -0.01"></a-plane></a-entity>
+             <a-entity rotation="0 0 90"><a-plane color="cyan" height="2" width="0.05" position="0 0 -0.01"></a-plane></a-entity>
         </a-entity>
-        
+
         <a-entity id="band-model" 
                   gltf-model="#modelAsset" 
-                  rotation="0 45 180" 
+                  rotation="-90 180 0" 
                   position="0 0 0" 
+                  scale="0 0 0" 
                   visible="false">
         </a-entity>
         
