@@ -2,23 +2,20 @@
 <html>
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LIVE AR - DEBUG MODE</title>
+    <title>LIVE AR - FIXED</title>
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
     
     <style>
       body { margin: 0; overflow: hidden; background: black; font-family: monospace; }
       
-      /* ビデオタグ（背景）を動かす設定 */
       video {
         transition: transform 0.1s ease-out; 
         transform-origin: center center;
       }
 
-      /* MindAR UI消去 */
       .mindar-ui-loading, .mindar-ui-scanning { display: none !important; }
 
-      /* スタート画面 */
       #overlay {
         position: absolute; top: 0; left: 0; width: 100%; height: 100%;
         background: black; z-index: 99999;
@@ -31,20 +28,23 @@
         font-size: 20px; font-weight: bold; background: white; color: black; border: none;
       }
 
-      /* デバッグログ（画面上に常時表示） */
+      /* デバッグログ（エラーは赤く出る） */
       #debug-console {
         position: absolute; top: 0; left: 0; width: 100%;
         background: rgba(0,0,0,0.7); color: lime; 
-        padding: 5px; font-size: 12px; pointer-events: none; z-index: 10000;
-        white-space: pre-wrap; /* 改行を表示 */
+        padding: 5px; font-size: 14px; pointer-events: none; z-index: 10000;
+        white-space: pre-wrap; 
       }
+      .error-msg { color: red; font-weight: bold; background: white; }
     </style>
 
     <script>
-      // ▼ 画面にログを出す関数
-      function log(msg) {
+      function log(msg, isError = false) {
         const d = document.getElementById('debug-console');
-        if(d) d.innerText += "\n" + msg;
+        if(d) {
+            if(isError) d.innerHTML += "\n<span class='error-msg'>" + msg + "</span>";
+            else d.innerText += "\n" + msg;
+        }
         console.log(msg);
       }
 
@@ -52,65 +52,74 @@
         init: function () {
             log("[1] System Init");
             
-            this.audioEl = document.querySelector('#bgm');
-            this.model = document.querySelector('#band-model');
-            this.videoEl = null;
-            this.isPlaying = false;
+            // ★重要：ここで「自分」を変数 me に保存して固定する！
+            let me = this;
+
+            me.audioEl = document.querySelector('#bgm');
+            me.model = document.querySelector('#band-model');
+            me.videoEl = null;
+            me.isPlaying = false;
             
-            const scene = this.el.sceneEl;
+            const scene = me.el.sceneEl;
             const targetEntity = document.querySelector('#target-entity');
 
-            // AR準備完了
             scene.addEventListener("arReady", () => {
-                log("[2] AR Ready. Video searching...");
-                this.videoEl = document.querySelector('video');
-                if(this.videoEl) log("-> Video Found!");
-                else log("-> Video NOT Found (Warning)");
+                log("[2] AR Ready");
+                me.videoEl = document.querySelector('video');
+                if(me.videoEl) log("-> Video Found");
             });
 
-            // ★ターゲット認識
             targetEntity.addEventListener("targetFound", () => {
                 log("[3] Target FOUND!");
                 
-                if (!this.isPlaying) {
-                    this.startSequence();
+                // ★ここからエラーが起きても止まらないように監視する
+                try {
+                    if (!me.isPlaying) {
+                        log("-> Calling Start...");
+                        // me を使って呼び出す
+                        me.startSequence(); 
+                    } else {
+                        log("-> Already Playing");
+                    }
+                } catch(e) {
+                    // ★もしエラーなら画面に赤字で出す！
+                    log("CRASH: " + e.message, true);
                 }
-            });
-            
-            targetEntity.addEventListener("targetLost", () => {
-                // log("[Status] Lost..."); // ログが流れるのでコメントアウト
             });
         },
 
         startSequence: function() {
-            this.isPlaying = true;
-            log("[4] Sequence Start");
-
-            // ① モデル表示 (エラーが出ないようtry-catch)
+            // ここでも me ではなく this を使う（呼び出されれば this は正しい）
+            // 安全のため try-catch
             try {
-                this.model.setAttribute('visible', true);
-                this.model.setAttribute('scale', '1 1 1'); // アニメーションなしで即表示（安全策）
-                log("-> Model Visible");
-            } catch(e) {
-                log("Error: Model failed " + e);
-            }
+                this.isPlaying = true;
+                log("[4] Sequence Started");
 
-            // ② 音楽再生
-            log("[5] Attempting Audio...");
-            this.audioEl.play()
-                .then(() => {
-                    log("[6] Audio Success! Starts Loop");
-                    this.startReactivity(); 
-                })
-                .catch((e) => {
-                    log("[!] Audio Failed: " + e.message);
-                    log("-> Force starting visuals anyway");
-                    this.startReactivity(true); // 音なしで強制スタート
-                });
+                // ① モデル表示
+                this.model.setAttribute('visible', true);
+                this.model.setAttribute('scale', '1 1 1');
+                log("-> Model ON");
+
+                // ② 音楽再生
+                log("[5] Audio Play...");
+                this.audioEl.play()
+                    .then(() => {
+                        log("[6] Audio OK! Loop Start");
+                        this.startReactivity(); 
+                    })
+                    .catch((e) => {
+                        log("[!] Audio Blocked: " + e.message, true);
+                        log("-> Force Visuals");
+                        this.startReactivity(true);
+                    });
+
+            } catch(e) {
+                log("SEQ ERROR: " + e.message, true);
+            }
         },
 
         startReactivity: function(silentMode = false) {
-            log("[7] Reactive Loop Start");
+            log("[7] Reactive Loop");
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             let analyser = null;
             let data = null;
@@ -124,9 +133,12 @@
                     analyser.connect(ctx.destination);
                     data = new Uint8Array(analyser.frequencyBinCount);
                 } catch(e) {
-                    log("AudioContext Error: " + e);
+                    log("AudioCtx Error: " + e);
                 }
             }
+
+            // this のスコープが外れるので、ここでも変数に入れる
+            let that = this;
 
             const loop = () => {
                 requestAnimationFrame(loop);
@@ -138,24 +150,23 @@
                     for(let i=0; i<5; i++) bass += data[i];
                     level = bass / 5 / 255; 
                 } else {
-                    // サイレント時のデモ動作
-                    level = (Math.sin(Date.now() / 100) + 1) * 0.4;
+                    level = (Math.sin(Date.now() / 150) + 1) * 0.4; // オートデモ
                 }
 
                 if (level < 0.2) level = 0;
                 else level = (level - 0.2) * 2.0;
 
                 // 映像ズーム
-                if (this.videoEl) {
+                if (that.videoEl) {
                     const scale = 1.0 + (level * 0.4);
-                    this.videoEl.style.transform = `scale(${scale})`;
+                    that.videoEl.style.transform = `scale(${scale})`;
                 }
                 
-                // モデル回転
-                if(this.model) {
-                    this.model.object3D.rotation.y += 0.05;
+                // モデル
+                if(that.model) {
+                    that.model.object3D.rotation.y += 0.03;
                     const s = 1.0 + (level * 0.3);
-                    this.model.object3D.scale.set(s, s, s);
+                    that.model.object3D.scale.set(s, s, s);
                 }
             };
             loop();
@@ -163,13 +174,10 @@
       });
 
       window.onload = () => {
-        log("[0] Window Loaded");
         const btn = document.getElementById('enter-btn');
         btn.addEventListener('click', () => {
-            log("-> Button Clicked");
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             ctx.resume().then(() => {
-                log("-> AudioContext Resumed");
                 document.getElementById('overlay').style.display = 'none';
             });
         });
@@ -179,7 +187,7 @@
   <body>
 
     <div id="overlay">
-        <h1>DEBUG MODE</h1>
+        <h1>FIXED MODE</h1>
         <button id="enter-btn">START</button>
     </div>
 
@@ -205,7 +213,7 @@
 
       <a-entity id="target-entity" mindar-image-target="targetIndex: 0">
         
-        <a-box id="debug-box" color="red" position="0 0.5 0" scale="0.2 0.2 0.2"></a-box>
+        <a-box color="red" position="0 0.5 0" scale="0.1 0.1 0.1"></a-box>
 
         <a-entity id="band-model" 
                   gltf-model="#modelAsset" 
