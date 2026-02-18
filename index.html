@@ -1,162 +1,159 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LIVE AR FINAL</title>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>LIVE AR RECOVERY</title>
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
-    
+
     <style>
-      body { margin: 0; overflow: hidden; background: black; }
-      
-      /* 集中線（Manga FX）のオーバーレイ */
-      #manga-overlay {
-        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-        background: radial-gradient(circle, transparent 30%, rgba(0,0,0,0.9) 100%);
-        pointer-events: none; z-index: 10; opacity: 0;
-        display: block;
-      }
-
-      /* 画面全体の振動（Cam FX） */
-      #vibe-container {
-        width: 100%; height: 100%;
-        transition: transform 0.05s linear;
-      }
-
-      /* スタート画面 */
-      #overlay {
-        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-        background: black; z-index: 99999;
-        display: flex; align-items: center; justify-content: center;
-      }
-      #enter-btn {
-        padding: 25px 60px; font-size: 24px; font-weight: bold;
-        background: red; color: white; border: none; cursor: pointer;
-      }
-      #status {
-        position: absolute; top: 10px; left: 10px; color: lime; font-family: monospace; z-index: 100;
-      }
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        /* スタート画面：絶対に最前面 */
+        #start-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; color: #fff; z-index: 10000;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+        }
+        #start-button {
+            padding: 20px 60px; font-size: 24px; font-weight: bold;
+            background: #ff0000; color: #fff; border: none; border-radius: 50px;
+        }
+        /* 集中線（Manga FX）：CSSで作る絶対崩れない枠 */
+        #manga-mask {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 500;
+            background: radial-gradient(circle, transparent 40%, rgba(0,0,0,0.9) 150%);
+            display: none; /* 認識するまで隠す */
+        }
+        /* ログ：状況確認用 */
+        #log {
+            position: fixed; top: 10px; left: 10px; color: #0f0; 
+            font-size: 12px; z-index: 1001; background: rgba(0,0,0,0.5);
+        }
     </style>
-  </head>
-  <body>
+</head>
 
-    <div id="overlay">
-        <button id="enter-btn">ENTER LIVE</button>
+<body>
+    <div id="log">Waiting for Start...</div>
+    <div id="manga-mask"></div>
+
+    <div id="start-screen">
+        <h1 style="margin-bottom:10px;">LIVE AR</h1>
+        <p style="margin-bottom:30px; opacity:0.7;">Sound On & Max Volume</p>
+        <button id="start-button">START LIVE</button>
     </div>
-    <div id="status">INIT...</div>
-    <div id="manga-overlay"></div>
 
-    <div id="vibe-container">
-        <a-scene 
-          mindar-image="imageTargetSrc: ./targets.mind; uiLoading: no; uiScanning: no;" 
-          embedded color-space="sRGB" renderer="colorManagement: true, physicallyCorrectLights: true" vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false">
-          
-          <a-assets>
-            <a-asset-item id="modelAsset" src="./scene.gltf"></a-asset-item>
+    <a-scene 
+        mindar-image="imageTargetSrc: ./targets.mind; uiLoading: no; uiScanning: no;" 
+        embedded
+        color-space="sRGB" 
+        renderer="colorManagement: true, physicallyCorrectLights: true" 
+        vr-mode-ui="enabled: false" 
+        device-orientation-permission-ui="enabled: false">
+        
+        <a-assets>
+            <a-asset-item id="bandModel" src="./scene.gltf"></a-asset-item>
             <audio id="bgm" src="./music.m4a" preload="auto" crossorigin="anonymous"></audio>
-          </a-assets>
+        </a-assets>
 
-          <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
-          <a-light type="ambient" intensity="1.5"></a-light>
-          <a-light type="directional" intensity="2" position="1 2 2"></a-light>
+        <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
-          <a-entity id="target-anchor" mindar-image-target="targetIndex: 0">
-            <a-circle id="wave-disk" color="red" radius="0.5" opacity="0.6" position="0 0 0.01"
-                      animation="property: scale; from: 0.8 0.8 0.8; to: 1.2 1.2 1.2; dur: 500; dir: alternate; loop: true; easing: easeInOutQuad">
-            </a-circle>
-            
-            <a-entity id="band-model" 
-                      gltf-model="#modelAsset" 
-                      rotation="-90 180 0" 
-                      position="0 0 0" 
-                      scale="1 1 1" 
-                      visible="false">
+        <a-entity id="target" mindar-image-target="targetIndex: 0">
+            <a-entity id="model-entity" 
+                gltf-model="#bandModel" 
+                scale="1 1 1" 
+                rotation="0 0 0" 
+                visible="false">
             </a-entity>
-          </a-entity>
-        </a-scene>
-    </div>
+
+            <a-circle id="wave" 
+                color="#ff0000" 
+                radius="0.6" 
+                rotation="-90 0 0" 
+                opacity="0.8" 
+                visible="false">
+            </a-circle>
+        </a-entity>
+
+        <a-light type="ambient" intensity="1"></a-light>
+        <a-light type="directional" intensity="1.5" position="1 2 1"></a-light>
+    </a-scene>
 
     <script>
-      const log = (m) => document.getElementById('status').innerText = m;
-      const audio = document.getElementById('bgm');
-      const container = document.getElementById('vibe-container');
-      const manga = document.getElementById('manga-overlay');
-      const model = document.getElementById('band-model');
-      const wave = document.getElementById('wave-disk');
-      
-      let isLive = false;
+        const logEl = document.getElementById('log');
+        const startBtn = document.getElementById('start-button');
+        const startScreen = document.getElementById('start-screen');
+        const mask = document.getElementById('manga-mask');
+        const audio = document.getElementById('bgm');
+        const model = document.getElementById('model-entity');
+        const wave = document.getElementById('wave');
+        
+        let isDetected = false;
 
-      // 1. ENTERボタンでオーディオの準備
-      document.getElementById('enter-btn').addEventListener('click', function() {
-          const ctx = new (window.AudioContext || window.webkitAudioContext)();
-          ctx.resume().then(() => {
-              document.getElementById('overlay').style.display = 'none';
-              log("READY: SCAN NEWSPAPER");
-          });
-      });
+        // 【Step 1】スタートボタン
+        startBtn.addEventListener('click', () => {
+            // iOSのオーディオロックを解除
+            audio.play().then(() => {
+                audio.pause(); // 鳴らしてすぐ止める（予約）
+                audio.volume = 1;
+                logEl.innerText = "READY: SCAN NEWSPAPER";
+                startScreen.style.display = 'none';
+            });
+        });
 
-      // 2. 認識イベント
-      document.querySelector('#target-anchor').addEventListener("targetFound", () => {
-          if (!isLive) {
-              log("LIVE START!");
-              isLive = true;
-              
-              // モデル表示
-              model.setAttribute('visible', true);
-              
-              // 音楽再生
-              audio.play().then(() => {
-                  startVibrationLoop();
-              }).catch(e => {
-                  log("Audio Play Error: " + e.message);
-                  startVibrationLoop(); // 音が出なくても視覚演出は開始
-              });
-          }
-      });
+        // 【Step 2】マーカー認識
+        document.querySelector('#target').addEventListener("targetFound", () => {
+            if (!isDetected) {
+                isDetected = true;
+                logEl.innerText = "LIVE START!";
+                
+                // 表示開始
+                model.setAttribute('visible', true);
+                wave.setAttribute('visible', true);
+                mask.style.display = 'block';
 
-      // 3. オーディオリアクティブ・ループ
-      function startVibrationLoop() {
-          const ctx = new (window.AudioContext || window.webkitAudioContext)();
-          const src = ctx.createMediaElementSource(audio);
-          const analyser = ctx.createAnalyser();
-          analyser.fftSize = 128;
-          src.connect(analyser);
-          analyser.connect(ctx.destination);
-          const data = new Uint8Array(analyser.frequencyBinCount);
+                // 再生開始
+                audio.play();
+                startAudioAnalysis();
+            }
+        });
 
-          function render() {
-              requestAnimationFrame(render);
-              analyser.getByteFrequencyData(data);
-              
-              // 低音域の強さを取得 (0.0 - 1.0)
-              let val = data[2] / 255; 
-              
-              if (val > 0.4) {
-                  const level = (val - 0.4) * 2;
-                  
-                  // A. Cam FX: 画面全体のズーム & 揺れ
-                  container.style.transform = `scale(${1 + level * 0.15}) rotate(${(Math.random()-0.5) * level * 2}deg)`;
-                  
-                  // B. Manga FX: 集中線の不透明度
-                  manga.style.opacity = level * 0.8;
-                  
-                  // C. Wave FX: 波の色の変化
-                  wave.setAttribute('color', level > 0.7 ? '#ffffff' : '#ff0000');
-                  
-                  // D. Model: 音に合わせて跳ねる
-                  const s = 1 + level * 0.4;
-                  model.object3D.scale.set(s, s, s);
+        // 【Step 3】オーディオリアクティブ（極限までシンプルに）
+        function startAudioAnalysis() {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const src = ctx.createMediaElementSource(audio);
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 128;
+            src.connect(analyser);
+            analyser.connect(ctx.destination);
+            const data = new Uint8Array(analyser.frequencyBinCount);
 
-                  // Androidバイブレーション
-                  if (level > 0.8 && navigator.vibrate) navigator.vibrate(30);
-              } else {
-                  container.style.transform = "scale(1) rotate(0deg)";
-                  manga.style.opacity = "0";
-                  model.object3D.scale.set(1, 1, 1);
-              }
-          }
-          render();
-      }
+            function update() {
+                requestAnimationFrame(update);
+                analyser.getByteFrequencyData(data);
+                
+                // 低音（キック）の強さを取得
+                let volume = data[2] / 255; 
+
+                if (volume > 0.4) {
+                    let level = (volume - 0.4) * 2; // 増幅
+
+                    // A. モデルをバウンドさせる
+                    let s = 1 + (level * 0.3);
+                    model.object3D.scale.set(s, s, s);
+
+                    // B. 集中線（マスク）を動かす
+                    // グラデーションの透明な穴を広げたり狭めたりする
+                    let hole = 50 - (level * 20);
+                    mask.style.background = `radial-gradient(circle, transparent ${hole}%, rgba(0,0,0,0.9) 150%)`;
+
+                    // C. 波形を拡大
+                    wave.setAttribute('scale', `${s} ${s} ${s}`);
+                }
+            }
+            update();
+        }
     </script>
-  </body>
+</body>
 </html>
