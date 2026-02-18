@@ -2,20 +2,20 @@
 <html>
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LIVE AR - FINAL</title>
+    <title>LIVE AR - DEBUG MODE</title>
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
     
     <style>
-      body { margin: 0; overflow: hidden; background: black; font-family: sans-serif; }
+      body { margin: 0; overflow: hidden; background: black; font-family: monospace; }
       
-      /* 背景ビデオ（ここを揺らす） */
+      /* ビデオタグ（背景）を動かす設定 */
       video {
-        transition: transform 0.05s linear; /* キビキビ動かす */
+        transition: transform 0.1s ease-out; 
         transform-origin: center center;
       }
 
-      /* UI除去 */
+      /* MindAR UI消去 */
       .mindar-ui-loading, .mindar-ui-scanning { display: none !important; }
 
       /* スタート画面 */
@@ -27,35 +27,33 @@
       }
       
       #enter-btn {
-        margin-top: 20px; padding: 20px 60px; 
-        font-size: 24px; font-weight: 900; background: white; color: black; border: none;
-        clip-path: polygon(0 0, 100% 0, 100% 80%, 90% 100%, 0 100%);
+        margin-top: 20px; padding: 20px 50px; 
+        font-size: 20px; font-weight: bold; background: white; color: black; border: none;
       }
 
-      /* 演出用テキスト */
-      #live-text {
-        position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-        color: red; font-size: 40px; font-weight: 900; 
-        text-shadow: 2px 2px 0 #fff; z-index: 10000;
-        display: none; /* 最初は隠す */
-        pointer-events: none;
+      /* デバッグログ（画面上に常時表示） */
+      #debug-console {
+        position: absolute; top: 0; left: 0; width: 100%;
+        background: rgba(0,0,0,0.7); color: lime; 
+        padding: 5px; font-size: 12px; pointer-events: none; z-index: 10000;
+        white-space: pre-wrap; /* 改行を表示 */
       }
     </style>
 
     <script>
-      // ▼ 画質向上
-      AFRAME.registerComponent('fix-quality', {
-        init: function() {
-            this.el.sceneEl.renderer.setPixelRatio(window.devicePixelRatio);
-        }
-      });
+      // ▼ 画面にログを出す関数
+      function log(msg) {
+        const d = document.getElementById('debug-console');
+        if(d) d.innerText += "\n" + msg;
+        console.log(msg);
+      }
 
-      // ▼ メイン制御
       AFRAME.registerComponent('live-director', {
         init: function () {
+            log("[1] System Init");
+            
             this.audioEl = document.querySelector('#bgm');
             this.model = document.querySelector('#band-model');
-            this.liveText = document.querySelector('#live-text');
             this.videoEl = null;
             this.isPlaying = false;
             
@@ -64,112 +62,100 @@
 
             // AR準備完了
             scene.addEventListener("arReady", () => {
-                // ここでビデオタグを確実に捕まえる
+                log("[2] AR Ready. Video searching...");
                 this.videoEl = document.querySelector('video');
-                console.log("Video Element Found:", this.videoEl);
+                if(this.videoEl) log("-> Video Found!");
+                else log("-> Video NOT Found (Warning)");
             });
 
             // ★ターゲット認識
             targetEntity.addEventListener("targetFound", () => {
-                if (!this.isPlaying && window.audioUnlocked) {
+                log("[3] Target FOUND!");
+                
+                if (!this.isPlaying) {
                     this.startSequence();
                 }
             });
             
             targetEntity.addEventListener("targetLost", () => {
-                // ロストしても止めない（チラつき防止）
+                // log("[Status] Lost..."); // ログが流れるのでコメントアウト
             });
         },
 
         startSequence: function() {
             this.isPlaying = true;
+            log("[4] Sequence Start");
 
-            // ① 視覚的に「始まった！」と出す
-            this.liveText.style.display = 'block';
-            this.liveText.innerText = "LIVE START!!";
-            
-            // 2秒後にテキストを消す
-            setTimeout(() => { this.liveText.style.display = 'none'; }, 2000);
+            // ① モデル表示 (エラーが出ないようtry-catch)
+            try {
+                this.model.setAttribute('visible', true);
+                this.model.setAttribute('scale', '1 1 1'); // アニメーションなしで即表示（安全策）
+                log("-> Model Visible");
+            } catch(e) {
+                log("Error: Model failed " + e);
+            }
 
-            // ② モデル表示
-            this.model.setAttribute('visible', true);
-            // アニメーション (scale 0 -> 1)
-            let s = 0;
-            const grow = setInterval(() => {
-                s += 0.05;
-                this.model.setAttribute('scale', `${s} ${s} ${s}`);
-                if (s >= 1.0) clearInterval(grow);
-            }, 30);
-
-            // ③ 音楽再生（エラー対策付き）
-            // ここでエラーが出ても、映像の処理は止めないようにPromiseで受ける
+            // ② 音楽再生
+            log("[5] Attempting Audio...");
             this.audioEl.play()
                 .then(() => {
-                    console.log("Audio Playing");
-                    this.startReactivity(); // 再生成功ならリアクティブ開始
+                    log("[6] Audio Success! Starts Loop");
+                    this.startReactivity(); 
                 })
                 .catch((e) => {
-                    console.error("Audio Failed:", e);
-                    this.liveText.innerText = "TAP SCREEN!"; // 失敗したらタップを促す
-                    // 音が出なくても映像だけは動かすモードへ
-                    this.startReactivity(true); 
+                    log("[!] Audio Failed: " + e.message);
+                    log("-> Force starting visuals anyway");
+                    this.startReactivity(true); // 音なしで強制スタート
                 });
         },
 
         startReactivity: function(silentMode = false) {
+            log("[7] Reactive Loop Start");
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             let analyser = null;
             let data = null;
 
             if (!silentMode) {
-                const src = ctx.createMediaElementSource(this.audioEl);
-                analyser = ctx.createAnalyser();
-                analyser.fftSize = 512;
-                src.connect(analyser);
-                analyser.connect(ctx.destination);
-                data = new Uint8Array(analyser.frequencyBinCount);
+                try {
+                    const src = ctx.createMediaElementSource(this.audioEl);
+                    analyser = ctx.createAnalyser();
+                    analyser.fftSize = 512;
+                    src.connect(analyser);
+                    analyser.connect(ctx.destination);
+                    data = new Uint8Array(analyser.frequencyBinCount);
+                } catch(e) {
+                    log("AudioContext Error: " + e);
+                }
             }
 
-            // ループ処理
             const loop = () => {
                 requestAnimationFrame(loop);
                 
                 let level = 0;
-
-                if (!silentMode && analyser) {
+                if (!silentMode && analyser && data) {
                     analyser.getByteFrequencyData(data);
                     let bass = 0;
-                    // 低音 (Bass) 重視
                     for(let i=0; i<5; i++) bass += data[i];
-                    level = bass / 5 / 255; // 0.0 ~ 1.0
+                    level = bass / 5 / 255; 
                 } else {
-                    // ★サイレントモード（音が出ない時）の緊急措置
-                    // 擬似的にビートを刻む（オートデモ）
-                    const time = Date.now() / 1000;
-                    level = (Math.sin(time * 10) + 1) * 0.3; // 勝手に揺らす
+                    // サイレント時のデモ動作
+                    level = (Math.sin(Date.now() / 100) + 1) * 0.4;
                 }
 
-                // 感度調整 (0.2以下はカット)
                 if (level < 0.2) level = 0;
                 else level = (level - 0.2) * 2.0;
 
-                // --- 演出 ---
-
-                // A. カメラ映像自体のズーム (K-Pop風)
-                // 音に合わせて 1.0倍 〜 1.4倍
+                // 映像ズーム
                 if (this.videoEl) {
                     const scale = 1.0 + (level * 0.4);
                     this.videoEl.style.transform = `scale(${scale})`;
                 }
-
-                // B. モデルのバウンス & 回転
-                const mScale = 1.0 + (level * 0.3);
-                this.model.object3D.scale.set(mScale, mScale, mScale);
-                this.model.object3D.rotation.y += 0.02 + (level * 0.05);
-
-                // C. バイブレーション (Android)
-                if (level > 0.7 && navigator.vibrate) {
-                    navigator.vibrate(50);
+                
+                // モデル回転
+                if(this.model) {
+                    this.model.object3D.rotation.y += 0.05;
+                    const s = 1.0 + (level * 0.3);
+                    this.model.object3D.scale.set(s, s, s);
                 }
             };
             loop();
@@ -177,13 +163,14 @@
       });
 
       window.onload = () => {
+        log("[0] Window Loaded");
         const btn = document.getElementById('enter-btn');
-        const overlay = document.getElementById('overlay');
         btn.addEventListener('click', () => {
+            log("-> Button Clicked");
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             ctx.resume().then(() => {
-                window.audioUnlocked = true;
-                overlay.style.display = 'none';
+                log("-> AudioContext Resumed");
+                document.getElementById('overlay').style.display = 'none';
             });
         });
       };
@@ -192,19 +179,17 @@
   <body>
 
     <div id="overlay">
-        <h1>LIVE AR</h1>
-        <p>VOLUME MAX</p>
+        <h1>DEBUG MODE</h1>
         <button id="enter-btn">START</button>
     </div>
 
-    <div id="live-text"></div>
+    <div id="debug-console">Waiting...</div>
 
     <a-scene 
-      fix-quality
       live-director
       mindar-image="imageTargetSrc: ./targets.mind; uiLoading: no; uiScanning: no; filterMinCF:0.0001; filterBeta: 0.001;" 
       color-space="sRGB" 
-      renderer="colorManagement: true, physicallyCorrectLights: true; antialias: true;" 
+      renderer="colorManagement: true, physicallyCorrectLights: true;" 
       vr-mode-ui="enabled: false" 
       device-orientation-permission-ui="enabled: false">
       
@@ -216,10 +201,12 @@
       <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
       <a-light type="ambient" intensity="1"></a-light>
-      <a-light type="directional" intensity="3" position="1 2 2" color="#ff0055"></a-light>
+      <a-light type="directional" intensity="3" position="1 2 2"></a-light>
 
       <a-entity id="target-entity" mindar-image-target="targetIndex: 0">
         
+        <a-box id="debug-box" color="red" position="0 0.5 0" scale="0.2 0.2 0.2"></a-box>
+
         <a-entity id="band-model" 
                   gltf-model="#modelAsset" 
                   rotation="-90 180 0" 
