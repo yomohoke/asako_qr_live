@@ -6,37 +6,33 @@
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
     
     <script>
-      // ▼ 紙面を歪ませるシェーダー（画像テクスチャ対応版）
+      // ▼ 紙面を歪ませるシェーダー（画像テクスチャ対応・グリッドなし）
       AFRAME.registerComponent('distorted-paper', {
         schema: {
-          src: {type: 'map'}, // 新聞の画像を渡す
+          src: {type: 'map'}, // 画像を受け取る設定
         },
         init: function () {
-          this.analyser = null;
-          this.dataArray = null;
           this.audioLevel = 0;
 
-          // 1. 新聞と同じサイズの平面を作る
-          const geometry = new THREE.PlaneGeometry(1, 1, 64, 64); // 分割数を増やして滑らかに
+          // 1. 平面を作成
+          const geometry = new THREE.PlaneGeometry(1, 1, 64, 64); 
           
-          // 2. マテリアル（画像を表示しつつ歪ませる）
-          const texture = new THREE.TextureLoader().load(this.data.src.src); // A-Frameから画像取得
+          // 2. 画像をテクスチャとして読み込み
+          // A-Frameのシステム経由で画像を取得
+          const texture = new THREE.TextureLoader().load(this.data.src.src); 
           
           const material = new THREE.ShaderMaterial({
+            wireframe: false, // ★ここでグリッドを消す！
+            transparent: true,
             uniforms: {
               uTime: { value: 0 },
               uAudio: { value: 0.0 },
-              uTexture: { value: texture }
+              uTexture: { value: texture } // シェーダーに画像を渡す
             },
             vertexShader: `
               varying vec2 vUv;
               uniform float uTime;
               uniform float uAudio;
-              
-              // ノイズ関数（ランダムな揺れを作る）
-              float random (in vec2 st) {
-                  return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
-              }
 
               void main() {
                 vUv = uv;
@@ -45,15 +41,14 @@
                 // 中心からの距離
                 float d = distance(uv, vec2(0.5));
                 
-                // 【演出】音に合わせて波打つ (Z軸方向)
-                // 低音でドーンと手前に突き出るような動き
-                float wave = sin(pos.x * 10.0 + uTime * 10.0) * cos(pos.y * 10.0 + uTime * 8.0);
-                
-                // エッジ（端っこ）は揺らさないようにして、現実の紙との境界をごまかす
+                // 音に合わせて波打つ（Z軸方向）
+                // 紙の端っこ(d>0.4)は揺らさないことで、現実の紙と馴染ませる
                 float mask = smoothstep(0.5, 0.2, d); 
-
-                // 揺れ適用
-                pos.z += wave * uAudio * 0.3 * mask; 
+                
+                float wave = sin(pos.x * 12.0 + uTime * 5.0) * cos(pos.y * 12.0 + uTime * 4.0);
+                
+                // 音量(uAudio)に応じて揺れ幅を変える
+                pos.z += wave * uAudio * 0.4 * mask; 
                 
                 gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
               }
@@ -64,16 +59,15 @@
               uniform float uAudio;
               
               void main() {
-                // 画像の色を取得
+                // 画像の色をそのまま表示
                 vec4 color = texture2D(uTexture, vUv);
                 
-                // 音に合わせて少し明るく発光させる（インパクト）
-                color.rgb += uAudio * 0.2;
+                // 音に合わせて少し明るくする（発光演出）
+                color.rgb += uAudio * 0.15;
                 
                 gl_FragColor = color;
               }
-            `,
-            transparent: true
+            `
           });
           
           this.mesh = new THREE.Mesh(geometry, material);
@@ -82,48 +76,38 @@
         
         tick: function (time, timeDelta) {
           if (!this.mesh) return;
-          
-          // シェーダーに時間を渡す
           this.mesh.material.uniforms.uTime.value = time / 1000;
-          
-          // 音量を滑らかに渡す
           this.mesh.material.uniforms.uAudio.value += (this.audioLevel - this.mesh.material.uniforms.uAudio.value) * 0.1;
         },
 
-        // 外部から音量を受け取る関数
         updateAudioLevel: function(level) {
             this.audioLevel = level;
         }
       });
 
-      // ▼ 音声解析と全体の進行管理
+      // ▼ コントローラー（タップ→出現→再生）
       AFRAME.registerComponent('live-controller', {
         init: function () {
             this.audioEl = document.querySelector('#bgm');
             this.model = document.querySelector('#band-model');
             this.paper = document.querySelector('#paper-plane');
             this.startBtn = document.querySelector('#start-button');
-            
             this.isPlaying = false;
             
-            // スタートボタン処理
             this.startBtn.addEventListener('click', () => {
                 this.startSequence();
             });
 
-            // マーカー認識イベント
             const scene = document.querySelector('a-scene');
             scene.addEventListener("targetFound", () => {
                 if(!this.isPlaying) {
-                    this.startBtn.style.display = 'block'; // 認識したらボタン出す
+                    this.startBtn.style.display = 'block';
                     this.startBtn.innerText = "TAP TO START LIVE";
                 }
             });
             scene.addEventListener("targetLost", () => {
                 this.startBtn.style.display = 'none';
-                if(this.isPlaying) {
-                   this.audioEl.pause(); // ロストしたら一時停止
-                }
+                if(this.isPlaying) this.audioEl.pause();
             });
         },
 
@@ -131,24 +115,24 @@
             this.isPlaying = true;
             this.startBtn.style.display = 'none';
 
-            // 1. まず機材が生えてくる (アニメーション)
+            // 1. モデルを表示
             this.model.setAttribute('visible', true);
+            
+            // 2. 拡大アニメーション (0 -> 1.0)
+            // ※モデルサイズが大きすぎる場合は if (scale >= 0.5) とかにしてください
             let scale = 0;
             const grow = setInterval(() => {
-                scale += 0.02; // 生えるスピード
+                scale += 0.05; 
                 this.model.setAttribute('scale', `${scale} ${scale} ${scale}`);
-                if (scale >= 0.5) { // 目標サイズ (0.5)
+                if (scale >= 1.0) { 
                     clearInterval(grow);
-                    // 2. 生えきったら音楽スタート & 振動開始
                     this.startMusic();
                 }
-            }, 30); // 30msごとに更新
+            }, 30);
         },
 
         startMusic: function() {
             this.audioEl.play();
-            
-            // AudioContextセットアップ
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             const ctx = new AudioContext();
             const src = ctx.createMediaElementSource(this.audioEl);
@@ -156,26 +140,17 @@
             analyser.fftSize = 256;
             src.connect(analyser);
             analyser.connect(ctx.destination);
-            
             const dataArray = new Uint8Array(analyser.frequencyBinCount);
             
-            // 毎フレーム音量を取得してシェーダーに渡すループ
             const loop = () => {
                 requestAnimationFrame(loop);
                 analyser.getByteFrequencyData(dataArray);
-                
-                // 低音の平均を取る
                 let sum = 0;
                 for(let i=0; i<10; i++) sum += dataArray[i];
-                let avg = sum / 10 / 255; // 0.0~1.0
+                let avg = sum / 10 / 255;
                 
-                // 紙面シェーダーに渡す
                 this.paper.components['distorted-paper'].updateAudioLevel(avg);
-                
-                // Androidバイブレーション
-                if (avg > 0.5 && navigator.vibrate) { // 音が大きい時だけ震える
-                    navigator.vibrate(50);
-                }
+                if (avg > 0.6 && navigator.vibrate) navigator.vibrate(50);
             };
             loop();
         }
@@ -185,9 +160,9 @@
     <style>
       body { margin: 0; overflow: hidden; }
       #start-button {
-        position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%);
-        padding: 15px 30px; background: white; color: black; border: 2px solid black; 
-        font-family: sans-serif; font-weight: bold; letter-spacing: 2px;
+        position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+        padding: 12px 24px; background: rgba(0,0,0,0.8); color: white; border: 1px solid white; 
+        font-family: sans-serif; letter-spacing: 1px; border-radius: 4px;
         display: none; z-index: 999; cursor: pointer;
       }
     </style>
@@ -205,15 +180,15 @@
       <a-assets>
         <a-asset-item id="modelAsset" src="./scene.gltf"></a-asset-item>
         <audio id="bgm" src="./music.m4a" preload="auto" crossorigin="anonymous"></audio>
+        
         <img id="paperTex" src="./asako_qr_1.png" />
       </a-assets>
 
       <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
-
       <a-entity live-controller></a-entity>
 
-      <a-light type="ambient" intensity="1"></a-light>
-      <a-light type="directional" intensity="2" position="1 2 3"></a-light>
+      <a-light type="ambient" intensity="1.2"></a-light>
+      <a-light type="directional" intensity="1.5" position="2 4 2"></a-light>
 
       <a-entity mindar-image-target="targetIndex: 0">
         
@@ -221,7 +196,7 @@
         
         <a-entity id="band-model" 
                   gltf-model="#modelAsset" 
-                  rotation="90 0 0" 
+                  rotation="0 45 180" 
                   position="0 0 0" 
                   scale="0 0 0"
                   visible="false">
