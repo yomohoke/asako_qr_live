@@ -1,163 +1,136 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>Live AR - Screen Shake Prototype</title>
+    <title>WebAR - Screen Shake Prototype</title>
+    
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
     
     <style>
-      /* 画面揺れでスクロールバーが出ないように固定 */
+      /* --- 画面シェイクのための重要設定 --- */
       html, body {
         margin: 0; padding: 0; width: 100%; height: 100%;
-        overflow: hidden; background-color: #000;
+        overflow: hidden; /* 揺れた時にスクロールバーが出るのを防ぐ */
+        background-color: #000;
+        /* 揺れの際に出る「画面の端の隙間」を隠すため、あらかじめ3%ズームしておく */
+        transform: scale(1.03); 
+        transform-origin: center center;
+        /* 揺れの戻りを少し滑らかにする（VJ的なキレを出すための調整） */
+        transition: transform 0.05s ease-out, filter 0.1s ease-out;
       }
-      
-      /* スタート画面のUI */
+
+      /* 開始前のUI */
       #ui-layer {
         position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-        background: #111; z-index: 9999; display: flex; flex-direction: column;
-        align-items: center; justify-content: center; color: white;
-        font-family: sans-serif; transition: opacity 0.5s;
+        background: #111; z-index: 9999;
+        display: flex; flex-direction: column; justify-content: center; align-items: center;
+        color: white; font-family: sans-serif; transition: opacity 0.5s;
       }
       button {
-        padding: 15px 40px; font-size: 1.2rem; border: 2px solid #fff;
-        background: transparent; color: #fff; cursor: pointer; letter-spacing: 0.1em;
+        padding: 15px 40px; font-size: 1.2rem; background: transparent;
+        color: white; border: 2px solid white; cursor: pointer; letter-spacing: 0.2em;
       }
-      button:active { background: #fff; color: #000; }
-      
-      /* 揺らす対象のラッパー（UI以外のすべてを揺らす） */
-      #ar-container {
-        width: 100%; height: 100%;
-        /* 揺れた時に黒枠が見えすぎないよう、デフォルトで少し拡大しておくのがVJの基本 */
-        transform: scale(1.05); 
-        transform-origin: center center;
-        will-change: transform; /* パフォーマンス最適化 */
-      }
+      button:active { background: white; color: black; }
     </style>
 
     <script>
-      AFRAME.registerSystem('vj-system', {
+      // ▼ 音声解析とCSSシェイクを制御するシステム
+      AFRAME.registerSystem('vj-controller', {
         init: function () {
-          this.audio = null;
           this.analyser = null;
           this.dataArray = null;
           this.isPlaying = false;
-          
-          // 揺らす対象のDOM
-          this.container = document.getElementById('ar-container');
+          this.bodyEl = document.body; // 揺らす対象
         },
-        
-        setupAudio: function () {
-          this.audio = document.getElementById('bgm');
+
+        startLive: function (audioId) {
+          const audio = document.querySelector(audioId);
           const AudioContext = window.AudioContext || window.webkitAudioContext;
           this.context = new AudioContext();
-          const src = this.context.createMediaElementSource(this.audio);
           
+          const src = this.context.createMediaElementSource(audio);
           this.analyser = this.context.createAnalyser();
-          this.analyser.fftSize = 256; 
+          this.analyser.fftSize = 256;
           
           src.connect(this.analyser);
           this.analyser.connect(this.context.destination);
           this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
           
-          // iOS対応: ユーザー操作コンテキスト内でAudioをアンロック
+          // iOS対応：ユーザーアクション内でAudioContextを起動
           this.context.resume();
-        },
-
-        play: function() {
-          if (!this.audio) return;
-          this.audio.play();
+          audio.play();
           this.isPlaying = true;
-        },
-
-        pause: function() {
-          if (!this.audio) return;
-          this.audio.pause();
-          this.isPlaying = false;
-          // 止まったら画面の位置をリセット
-          this.container.style.transform = `translate(0px, 0px) scale(1.05)`;
         },
 
         tick: function () {
           if (!this.isPlaying || !this.analyser) return;
+          
           this.analyser.getByteFrequencyData(this.dataArray);
           
-          // --- 1. 低音域（キック・ベース）の抽出 ---
-          // 0〜4番目あたりの周波数の平均を取る
+          // 【キック・ベース（低音）の抽出】
           let bassSum = 0;
           for(let i = 0; i < 5; i++) bassSum += this.dataArray[i];
-          let bassAvg = (bassSum / 5) / 255; // 0.0 〜 1.0 に正規化
+          const bassVolume = bassSum / 5 / 255; // 0.0 ~ 1.0
 
-          // --- 2. 画面シェイク（CSS Transform） ---
-          // 調整ポイント: 閾値（BASS_THRESHOLD）と 揺れの強さ（SHAKE_INTENSITY）
-          const BASS_THRESHOLD = 0.75; // この音量を超えたら揺れる（曲に合わせて調整！）
-          const SHAKE_INTENSITY = 30;  // 最大何ピクセル揺れるか
-          
-          if (bassAvg > BASS_THRESHOLD) {
-            // ドン！と鳴った瞬間：ランダムにXYをズラし、さらに少しズームインして迫力を出す
-            const over = bassAvg - BASS_THRESHOLD; // 閾値を超えた分のエネルギー
-            const shakeX = (Math.random() - 0.5) * SHAKE_INTENSITY * over * 5;
-            const shakeY = (Math.random() - 0.5) * SHAKE_INTENSITY * over * 5;
-            const scale = 1.05 + (over * 0.1); // 最大1.15倍くらいまでズーム
+          // 【演出：閾値を超えたら画面を揺らす】
+          // 数値（0.7）を下げるほど敏感に揺れます。楽曲に合わせて調整してください。
+          if (bassVolume > 0.7) {
+            // 揺れ幅の計算（音圧が高いほど激しく揺れる）
+            const shakeAmount = (bassVolume - 0.7) * 50; // 最大15px程度
+            const x = (Math.random() - 0.5) * shakeAmount;
+            const y = (Math.random() - 0.5) * shakeAmount;
             
-            this.container.style.transform = `translate(${shakeX}px, ${shakeY}px) scale(${scale})`;
+            // ズームインも少し加えて「迫ってくる」感を出す
+            const scale = 1.03 + (bassVolume * 0.02); 
+            
+            // CSSを直接書き換えて画面全体（カメラ映像＋AR）を揺らす
+            this.bodyEl.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+            
+            // 【おまけ演出】Resolume的な色収差/フラッシュ感
+            // 音圧に合わせてコントラストを上げ、わずかに色を回す
+            this.bodyEl.style.filter = `contrast(${100 + bassVolume * 50}%) saturate(${100 + bassVolume * 50}%)`;
           } else {
-            // 音が小さい時は元の位置に戻す（余韻を残すならここを補間処理にする）
-            this.container.style.transform = `translate(0px, 0px) scale(1.05)`;
+            // 音が小さい時は元の状態に即座に戻す
+            this.bodyEl.style.transform = `translate(0px, 0px) scale(1.03)`;
+            this.bodyEl.style.filter = `contrast(100%) saturate(100%)`;
           }
         }
       });
 
-      // マーカー認識時のコントロール
-      AFRAME.registerComponent('target-control', {
-        init: function () {
-          const system = this.el.sceneEl.systems['vj-system'];
-          this.el.addEventListener('targetFound', () => system.play());
-          this.el.addEventListener('targetLost', () => system.pause());
-        }
-      });
-
-      // スタートボタンの処理
-      window.startAR = function() {
-        const ui = document.getElementById('ui-layer');
-        // オーディオシステムの初期化
-        document.querySelector('a-scene').systems['vj-system'].setupAudio();
+      // UIボタンの処理
+      window.enterLive = function() {
+        document.getElementById('ui-layer').style.opacity = '0';
+        setTimeout(() => document.getElementById('ui-layer').style.display = 'none', 500);
         
-        ui.style.opacity = 0;
-        setTimeout(() => ui.style.display = 'none', 500);
+        // システムを起動して音楽を鳴らす
+        document.querySelector('a-scene').systems['vj-controller'].startLive('#bgm');
       };
     </script>
   </head>
   <body>
-    
     <div id="ui-layer">
-      <h2 style="margin-bottom: 20px;">LIVE EXPERIENCE</h2>
-      <button onclick="startAR()">ENTER</button>
-      <p style="font-size: 0.8rem; color: #888; margin-top: 20px;">音量を出してお楽しみください</p>
+      <button onclick="enterLive()">TAP TO START</button>
+      <p style="margin-top: 20px; font-size: 0.8rem; opacity: 0.7;">音量を出してお楽しみください</p>
     </div>
 
-    <div id="ar-container">
-      <a-scene 
-        mindar-image="imageTargetSrc: ./targets.mind; uiScanning: yes;" 
-        color-space="sRGB" 
-        renderer="colorManagement: true, physicallyCorrectLights: true" 
-        vr-mode-ui="enabled: false" 
-        device-orientation-permission-ui="enabled: false">
-        
-        <a-assets>
-          <audio id="bgm" src="./music.m4a" preload="auto" crossorigin="anonymous"></audio>
-        </a-assets>
+    <a-scene 
+      mindar-image="imageTargetSrc: ./targets.mind; autoStart: true; filterMinCF: 0.0001; filterBeta: 0.001;" 
+      color-space="sRGB" 
+      renderer="colorManagement: true" 
+      vr-mode-ui="enabled: false" 
+      device-orientation-permission-ui="enabled: false">
+      
+      <a-assets>
+        <audio id="bgm" src="./music.m4a" preload="auto" crossorigin="anonymous" loop></audio>
+      </a-assets>
 
-        <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
-        <a-entity mindar-image-target="targetIndex: 0" target-control>
-          <a-plane position="0 0 0" width="1" height="1.4" color="#fff" wireframe="true" opacity="0.3"></a-plane>
-        </a-entity>
-
-      </a-scene>
-    </div>
-
+      <a-entity mindar-image-target="targetIndex: 0">
+        <a-plane position="0 0 0" width="1" height="1.4" color="#ff0044" opacity="0.5" transparent="true"></a-plane>
+      </a-entity>
+    </a-scene>
   </body>
 </html>
