@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>WebAR - VJ Live Experience</title>
+    <title>WebAR - Chaos Live</title>
     
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
@@ -12,128 +12,130 @@
       html, body {
         margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
         background-color: #000;
-        /* 回転や歪みで端の黒枠が見えないよう、ズーム率を少し上げました (1.03 -> 1.08) */
-        transform: scale(1.08); 
-        transform-origin: center center;
-        /* 揺れの戻りを少し鋭く（VJっぽく）調整 */
-        transition: transform 0.03s ease-out, filter 0.05s ease-out;
       }
 
+      /* VJエフェクトをかけるためのステージ */
+      #vj-stage {
+        width: 100%; height: 100%;
+        /* 3D変換の基準点と遠近感の設定 */
+        transform-origin: center center;
+        perspective: 1000px; 
+        /* デフォルトで少しズームして黒枠回避 */
+        transform: scale(1.08);
+        /* 戻りを鋭くしてキレを出す */
+        transition: transform 0.02s ease-out, filter 0.02s ease-out;
+        /* GPUアクセラレーションのヒント */
+        will-change: transform, filter;
+      }
+
+      /* UI関連 */
       #ui-layer {
         position: fixed; top: 0; left: 0; width: 100%; height: 100%;
         background: #111; z-index: 9999;
         display: flex; flex-direction: column; justify-content: center; align-items: center;
-        color: white; font-family: sans-serif; transition: opacity 0.5s;
       }
       button {
-        padding: 15px 40px; font-size: 1.2rem; background: transparent;
-        color: white; border: 2px solid white; cursor: pointer; letter-spacing: 0.2em;
+        padding: 20px 50px; font-size: 1.5rem; background: white; font-weight: bold;
+        color: black; border: none; cursor: pointer; letter-spacing: 0.1em; transform: skewX(-10deg);
       }
-
       #dark-overlay {
         position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-        background: rgba(0, 0, 0, 0.9);
+        background: rgba(0, 0, 0, 0.95);
         z-index: 9000; pointer-events: none;
         display: none; justify-content: center; align-items: center;
-        color: rgba(255,255,255,0.7); font-family: sans-serif; letter-spacing: 0.1em;
-        transition: opacity 0.8s ease-out;
+        color: rgba(255,255,255,0.5); font-family: sans-serif;
+        transition: opacity 0.6s ease-out;
       }
     </style>
 
     <script>
       AFRAME.registerSystem('vj-controller', {
         init: function () {
-          this.audio = null;
-          this.analyser = null;
-          this.dataArray = null;
-          this.isPlaying = false;
-          this.bodyEl = document.body;
+          this.audio = null; this.analyser = null; this.dataArray = null; this.isPlaying = false;
+          // エフェクトをかける対象をステージに変更
+          this.stageEl = document.getElementById('vj-stage');
           
-          // RGB Shift用のSVGフィルター要素を取得
-          this.offsetR = document.getElementById('offset-r');
-          this.offsetG = document.getElementById('offset-g');
+          // RGB Shift用のSVG要素取得 (R, G, Bそれぞれ)
+          this.offsetR = document.getElementById('off-r');
+          this.offsetG = document.getElementById('off-g');
+          this.offsetB = document.getElementById('off-b');
         },
 
         setupAudio: function (audioId) {
           this.audio = document.querySelector(audioId);
           const AudioContext = window.AudioContext || window.webkitAudioContext;
           this.context = new AudioContext();
-          
           const src = this.context.createMediaElementSource(this.audio);
           this.analyser = this.context.createAnalyser();
           this.analyser.fftSize = 256;
-          
           src.connect(this.analyser);
           this.analyser.connect(this.context.destination);
           this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
           
-          // 【修正】音漏れ防止の完全ミュートハック
-          this.audio.muted = true; // まずミュート
+          // 完全ミュートハックで再生権限取得
+          this.audio.muted = true;
           this.audio.play().then(() => {
-            this.audio.pause();
-            this.audio.currentTime = 0;
-            this.audio.muted = false; // 再生権限を得た後でミュート解除
-            this.context.resume();
-          }).catch(e => console.error("Audio Setup Error:", e));
+            this.audio.pause(); this.audio.currentTime = 0;
+            this.audio.muted = false; this.context.resume();
+          });
         },
 
-        playLive: function () {
-          if (this.audio) {
-            this.context.resume(); // 念のため再開
-            this.audio.play();
-            this.isPlaying = true;
-          }
-        },
-
+        playLive: function () { if(this.audio){ this.context.resume(); this.audio.play(); this.isPlaying = true; } },
         pauseLive: function () {
-          if (this.audio) {
-            this.audio.pause();
-            this.isPlaying = false;
-            
-            // 揺れとエフェクトを強制リセット
-            this.bodyEl.style.transform = `translate(0px, 0px) scale(1.08) rotate(0deg) skewX(0deg)`;
-            this.bodyEl.style.filter = `none`;
-            this.offsetR.setAttribute('dx', 0);
-            this.offsetG.setAttribute('dx', 0);
+          if(this.audio){
+            this.audio.pause(); this.isPlaying = false;
+            // 強制リセット
+            this.stageEl.style.transform = `scale(1.08)`;
+            this.stageEl.style.filter = `none`;
+            this.resetRGB();
           }
+        },
+        resetRGB: function() {
+            this.offsetR.setAttribute('dx', 0); this.offsetR.setAttribute('dy', 0);
+            this.offsetG.setAttribute('dx', 0); this.offsetG.setAttribute('dy', 0);
+            this.offsetB.setAttribute('dx', 0); this.offsetB.setAttribute('dy', 0);
         },
 
         tick: function () {
           if (!this.isPlaying || !this.analyser) return;
-          
           this.analyser.getByteFrequencyData(this.dataArray);
-          
-          let bassSum = 0;
-          for(let i = 0; i < 5; i++) bassSum += this.dataArray[i];
-          const bassVolume = bassSum / 5 / 255;
+          let bassSum = 0; for(let i=0; i<5; i++) bassSum+=this.dataArray[i];
+          const bassVolume = bassSum/5/255;
 
-          // 感度0.9以上でエフェクト発動
+          // 感度0.9で発動
           if (bassVolume > 0.9) {
-            // --- 1. 過激なシェイク（Translate + Rotate + Skew） ---
-            const intensity = (bassVolume - 0.9) * 10; // 強度係数
+            const intensity = (bassVolume - 0.9) * 20; // 強度係数（さらに強化）
             
-            const x = (Math.random() - 0.5) * 80 * intensity;  // 激しい横揺れ
-            const y = (Math.random() - 0.5) * 80 * intensity;  // 激しい縦揺れ
-            const angle = (Math.random() - 0.5) * 6 * intensity; // ±3度の回転（画面が傾く）
-            const skew = (Math.random() - 0.5) * 10 * intensity; // ±5度の歪み（Fragment的）
-            const scale = 1.08 + (bassVolume * 0.05); // ズームイン
+            // --- 1. 空間崩壊シェイク (3D Transform) ---
+            // 画面がねじれて飛び出してくるような動き
+            const rX = (Math.random()-0.5) * 40 * intensity; // 縦の立体回転
+            const rY = (Math.random()-0.5) * 40 * intensity; // 横の立体回転
+            const rZ = (Math.random()-0.5) * 20 * intensity; // 面の回転
+            const tZ = Math.random() * 100 * intensity;      // 手前への飛び出し
+            const scale = 1.08 + (bassVolume * 0.15);        // 強烈なズーム
             
-            this.bodyEl.style.transform = `translate(${x}px, ${y}px) scale(${scale}) rotate(${angle}deg) skewX(${skew}deg)`;
+            // translate3dとrotate3dを組み合わせてカオスな変形を作る
+            this.stageEl.style.transform = `
+              scale(${scale})
+              translate3d(${(Math.random()-0.5)*50}px, ${(Math.random()-0.5)*50}px, ${tZ}px)
+              rotateX(${rX}deg) rotateY(${rY}deg) rotateZ(${rZ}deg)
+            `;
             
-            // --- 2. RGB Shift (色収差) の適用 ---
-            const rgbShiftAmount = intensity * 15; // 左右に最大15px程度ズレる
-            this.offsetR.setAttribute('dx', rgbShiftAmount);
-            this.offsetG.setAttribute('dx', -rgbShiftAmount); // Gは逆方向へ
+            // --- 2. RGB Shift カオス版 ---
+            const shift = intensity * 25; // ズレ幅拡大
+            // Rは右下、Gは左、Bは上にずらして色がバラバラになるように
+            this.offsetR.setAttribute('dx', shift);   this.offsetR.setAttribute('dy', shift*0.5);
+            this.offsetG.setAttribute('dx', -shift);  this.offsetG.setAttribute('dy', 0);
+            this.offsetB.setAttribute('dx', 0);       this.offsetB.setAttribute('dy', -shift*0.8);
             
-            // コントラストも爆上げしてチカチカさせる
-            this.bodyEl.style.filter = `contrast(150%) brightness(120%) url(#rgb-shift)`;
+            // コントラストと彩度を限界まで上げてバグらせる
+            this.stageEl.style.filter = `contrast(200%) saturate(200%) url(#rgb-shift-chaos)`;
 
           } else {
-            // 低音が無い時はスッと元に戻す
-            this.bodyEl.style.transform = `translate(0px, 0px) scale(1.08) rotate(0deg) skewX(0deg)`;
-            this.bodyEl.style.filter = `none`; // フィルターを外して軽くする
-            this.offsetR.setAttribute('dx', 0);
-            this.offsetG.setAttribute('dx', 0);
+            // 即座にリセット（ここがキレの命）
+            this.stageEl.style.transform = `scale(1.08)`;
+            this.stageEl.style.filter = `none`;
+            this.resetRGB();
           }
         }
       });
@@ -142,72 +144,54 @@
         init: function () {
           const system = this.el.sceneEl.systems['vj-controller'];
           const darkOverlay = document.getElementById('dark-overlay');
-
           this.el.addEventListener('targetFound', () => {
-            darkOverlay.style.opacity = '0';
-            system.playLive();
+            darkOverlay.style.opacity = '0'; system.playLive();
           });
-
           this.el.addEventListener('targetLost', () => {
-            darkOverlay.style.opacity = '1';
-            system.pauseLive();
+            darkOverlay.style.opacity = '1'; system.pauseLive();
           });
         }
       });
 
       window.enterLive = function() {
-        const uiLayer = document.getElementById('ui-layer');
-        const darkOverlay = document.getElementById('dark-overlay');
-        
-        uiLayer.style.opacity = '0';
-        setTimeout(() => uiLayer.style.display = 'none', 500);
-        
-        darkOverlay.style.display = 'flex';
+        document.getElementById('ui-layer').style.opacity = '0';
+        setTimeout(()=>document.getElementById('ui-layer').style.display='none',500);
+        document.getElementById('dark-overlay').style.display = 'flex';
         document.querySelector('a-scene').systems['vj-controller'].setupAudio('#bgm');
       };
     </script>
   </head>
   <body>
-
-    <svg style="width:0; height:0; position:absolute;">
+    <svg style="width:0;height:0;position:absolute;">
       <defs>
-        <filter id="rgb-shift">
-          <feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" in="SourceGraphic" result="RED"/>
-          <feOffset id="offset-r" dx="0" dy="0" in="RED" result="RED_SHIFTED"/>
-          
-          <feColorMatrix type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" in="SourceGraphic" result="GREEN"/>
-          <feOffset id="offset-g" dx="0" dy="0" in="GREEN" result="GREEN_SHIFTED"/>
-          
-          <feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" in="SourceGraphic" result="BLUE"/>
-          
-          <feBlend mode="screen" in="RED_SHIFTED" in2="GREEN_SHIFTED" result="RG"/>
-          <feBlend mode="screen" in="RG" in2="BLUE" result="RGB"/>
+        <filter id="rgb-shift-chaos" x="-20%" y="-20%" width="140%" height="140%">
+          <feColorMatrix type="matrix" values="1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0" result="R"/>
+          <feOffset id="off-r" dx="0" dy="0" in="R" result="R_S"/>
+          <feColorMatrix type="matrix" values="0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 1 0" result="G"/>
+          <feOffset id="off-g" dx="0" dy="0" in="G" result="G_S"/>
+          <feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 1 0" result="B"/>
+          <feOffset id="off-b" dx="0" dy="0" in="B" result="B_S"/>
+          <feBlend mode="screen" in="R_S" in2="G_S" result="RG"/>
+          <feBlend mode="screen" in="RG" in2="B_S"/>
         </filter>
       </defs>
     </svg>
 
-    <div id="ui-layer">
-      <button onclick="enterLive()">TAP TO START</button>
+    <div id="ui-layer"><button onclick="enterLive()">LIVE START</button></div>
+    <div id="dark-overlay">SCAN THE NEWSPAPER</div>
+
+    <div id="vj-stage">
+      <a-scene 
+        mindar-image="imageTargetSrc: ./targets.mind; filterMinCF:0.0001; filterBeta:0.001;" 
+        color-space="sRGB" renderer="colorManagement:true" 
+        vr-mode-ui="enabled:false" device-orientation-permission-ui="enabled:false">
+        
+        <a-assets><audio id="bgm" src="./music.m4a" preload="auto" crossorigin="anonymous" loop></audio></a-assets>
+        <a-camera position="0 0 0" look-controls="enabled:false"></a-camera>
+
+        <a-entity mindar-image-target="targetIndex: 0" target-events>
+          </a-entity>
+      </a-scene>
     </div>
-
-    <div id="dark-overlay">
-      新聞のQRコード周辺を映してください
-    </div>
-
-    <a-scene 
-      mindar-image="imageTargetSrc: ./targets.mind; filterMinCF: 0.0001; filterBeta: 0.001;" 
-      color-space="sRGB" renderer="colorManagement: true" 
-      vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false">
-      
-      <a-assets>
-        <audio id="bgm" src="./music.m4a" preload="auto" crossorigin="anonymous" loop></audio>
-      </a-assets>
-
-      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
-
-      <a-entity mindar-image-target="targetIndex: 0" target-events>
-        <a-plane position="0 0 0" width="1" height="1.4" color="#ff0044" opacity="0.3" transparent="true"></a-plane>
-      </a-entity>
-    </a-scene>
   </body>
 </html>
